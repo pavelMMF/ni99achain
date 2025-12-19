@@ -15,3 +15,8 @@ ignition/deployments/**/*.journal
 # windows junk
 Thumbs.db
 Desktop.ini
+npx
+npx.cmd
+node
+npm
+npm.cmd
