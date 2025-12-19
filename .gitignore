@@ -3,8 +3,15 @@ cache/
 artifacts/
 typechain/
 coverage/
+
 .env
 .env.*
-ignition/deployments/chain-31337/
+
+ignition/deployments/
 ignition/deployments/**/*.journal
+
 .DS_Store
+
+# windows junk
+Thumbs.db
+Desktop.ini
