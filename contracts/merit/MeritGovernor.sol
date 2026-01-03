@@ -3,12 +3,12 @@
 
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/contracts/access/AccessControl.sol";
-import {Governor} from "@openzeppelin/contracts/contracts/governance/Governor.sol";
-import {GovernorSettings} from "@openzeppelin/contracts/contracts/governance/extensions/GovernorSettings.sol";
-import {GovernorVotes} from "@openzeppelin/contracts/contracts/governance/extensions/GovernorVotes.sol";
-import {IVotes} from "@openzeppelin/contracts/contracts/governance/utils/IVotes.sol";
-import {Strings} from "@openzeppelin/contracts/contracts/utils/Strings.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Governor} from "@openzeppelin/contracts/governance/Governor.sol";
+import {GovernorSettings} from "@openzeppelin/contracts/governance/extensions/GovernorSettings.sol";
+import {GovernorVotes} from "@openzeppelin/contracts/governance/extensions/GovernorVotes.sol";
+import {IVotes} from "@openzeppelin/contracts/governance/utils/IVotes.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 import {MeritOracle} from "./MeritOracle.sol";
 import {GovernorCountingFractionalRebalance} from "./GovernorCountingFractionalRebalance.sol";

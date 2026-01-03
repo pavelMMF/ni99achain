@@ -3,7 +3,7 @@
 
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/contracts/access/AccessControl.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @dev Operator-driven oracle that stores the daily weight (cap) available to each address.

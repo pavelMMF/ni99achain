@@ -3,10 +3,14 @@ cache/
 artifacts/
 typechain/
 coverage/
-
+infra/**
+**/infra/**
+**/data/**
+**/*.ipc
 .env
 .env.*
-
+tmp.json
+*.tmp
 ignition/deployments/
 ignition/deployments/**/*.journal
 
@@ -20,3 +24,16 @@ npx.cmd
 node
 npm
 npm.cmd
+infra/data/
+infra/.env
+infra/chain/signer.key
+infra/chain/password.txt
+# secrets
+.env
+**/.env
+.env.*
+!.env.example
+**/*.ipc
+infra/data/
+**/infra/data/
+

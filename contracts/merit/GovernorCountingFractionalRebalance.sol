@@ -3,8 +3,8 @@
 
 pragma solidity ^0.8.24;
 
-import {Governor} from "@openzeppelin/contracts/contracts/governance/Governor.sol";
-import {GovernorCountingSimple} from "@openzeppelin/contracts/contracts/governance/extensions/GovernorCountingSimple.sol";
+import {Governor} from "@openzeppelin/contracts/governance/Governor.sol";
+import {GovernorCountingSimple} from "@openzeppelin/contracts/governance/extensions/GovernorCountingSimple.sol";
 
 
 /**

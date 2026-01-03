@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/contracts/token/ERC20/ERC20.sol";
-import "@openzeppelin/contracts/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import "@openzeppelin/contracts/contracts/token/ERC20/extensions/ERC20Votes.sol";
-import "@openzeppelin/contracts/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/contracts/utils/Nonces.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Nonces.sol";
 
 contract GovToken is ERC20, ERC20Permit, ERC20Votes, Ownable {
     constructor()
