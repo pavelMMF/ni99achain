@@ -23,9 +23,8 @@ export default defineConfig({
   },
 
   networks: {
-    hardhatMainnet: { type: "edr-simulated", chainType: "l1" },
-    hardhatOp: { type: "edr-simulated", chainType: "op" },
-
+    hardhatMainnet: { type: "edr-simulated", chainType: "l1", chainId: 77777 },
+    hardhatOp: { type: "edr-simulated", chainType: "op", chainId: 77777 },
     homedao: {
       type: "http",
       chainType: "l1",

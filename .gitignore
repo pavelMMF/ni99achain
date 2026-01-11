@@ -37,3 +37,7 @@ infra/chain/password.txt
 infra/data/
 **/infra/data/
 
+
+# local env
+webapp/.env.local
+
