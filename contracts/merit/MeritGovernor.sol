@@ -17,6 +17,9 @@ import {GovernorCountingFractionalRebalance} from "./GovernorCountingFractionalR
  * Topic-aware Governor:
  * - proposalId -> topicId stored on-chain (set by proposeWithTopic)
  * - weight during voting = min(tokenPastVotes, oracle cap for this topic)
+ *
+ * Allowlist (hard revert):
+ * - only allowed addresses can create proposals and vote
  */
 contract MeritGovernor is
     Governor,
@@ -28,6 +31,16 @@ contract MeritGovernor is
     bytes32 public constant VOTE_REFRESHER_ROLE = keccak256("VOTE_REFRESHER_ROLE");
 
     MeritOracle public immutable oracle;
+
+    // --- Allowlist (hard revert) ---
+    mapping(address => bool) public allowed;
+
+    event AllowlistSet(address indexed account, bool allowed);
+
+    modifier onlyAllowed(address account) {
+        require(allowed[account], "NOT_ALLOWED");
+        _;
+    }
 
     // Topic metadata
     mapping(uint256 proposalId => uint32 topicId) private _proposalTopic;
@@ -52,6 +65,19 @@ contract MeritGovernor is
         oracle = oracle_;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(VOTE_REFRESHER_ROLE, admin);
+
+        // Optional: uncomment if you want admin to be allowed by default on deploy
+        // allowed[admin] = true;
+        // emit AllowlistSet(admin, true);
+    }
+
+    // --- Allowlist admin ---
+    function setAllowed(address account, bool isAllowed)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        allowed[account] = isAllowed;
+        emit AllowlistSet(account, isAllowed);
     }
 
     function proposalTopic(uint256 proposalId) external view returns (uint32) {
@@ -68,7 +94,7 @@ contract MeritGovernor is
         uint256[] memory values,
         bytes[] memory calldatas,
         string memory description
-    ) public returns (uint256) {
+    ) public onlyAllowed(msg.sender) returns (uint256) {
         string memory wrapped = string(
             abi.encodePacked("[topic:", Strings.toString(topicId), "] ", description)
         );
@@ -84,6 +110,7 @@ contract MeritGovernor is
     /**
      * CORE FIX:
      * Override _castVote so ALL castVote* paths use topic-aware weight.
+     * + Allowlist hard check (revert).
      */
     function _castVote(
         uint256 proposalId,
@@ -92,6 +119,7 @@ contract MeritGovernor is
         string memory reason,
         bytes memory params
     ) internal virtual override returns (uint256) {
+        require(allowed[account], "NOT_ALLOWED");
         _validateStateBitmap(proposalId, _encodeStateBitmap(ProposalState.Active));
 
         uint256 weight = _weightForProposal(proposalId, account, params);
@@ -116,6 +144,9 @@ contract MeritGovernor is
     ) external onlyRole(VOTE_REFRESHER_ROLE) returns (uint256) {
         _validateStateBitmap(proposalId, _encodeStateBitmap(ProposalState.Active));
 
+        // Optional hardening (not required for MVP, because only role can call)
+        // require(allowed[account], "NOT_ALLOWED");
+
         uint256 weight = _weightForProposal(proposalId, account, params);
         uint256 used = _countVote(proposalId, account, support, weight, params);
 
@@ -133,6 +164,9 @@ contract MeritGovernor is
     {
         _validateStateBitmap(proposalId, _encodeStateBitmap(ProposalState.Active));
 
+        // Optional hardening (not required for MVP, because only role can call)
+        // require(allowed[account], "NOT_ALLOWED");
+
         if (!hasVoted(proposalId, account)) {
             revert MeritGovernorNoExistingVote(proposalId, account);
         }
@@ -140,11 +174,25 @@ contract MeritGovernor is
         uint256 newWeight = _weightForProposal(proposalId, account, "");
 
         (uint256 aOld, uint256 fOld, uint256 abOld) = this.voteReceipt(proposalId, account);
-        (bytes memory paramsScaled, uint256 effectiveWeight) = _scaleReceiptToParams(aOld, fOld, abOld, newWeight);
+        (bytes memory paramsScaled, uint256 effectiveWeight) =
+            _scaleReceiptToParams(aOld, fOld, abOld, newWeight);
 
-        uint256 usedScaled = _countVote(proposalId, account, VOTE_TYPE_FRACTIONAL, effectiveWeight, paramsScaled);
+        uint256 usedScaled = _countVote(
+            proposalId,
+            account,
+            VOTE_TYPE_FRACTIONAL,
+            effectiveWeight,
+            paramsScaled
+        );
 
-        emit VoteCastWithParams(account, proposalId, VOTE_TYPE_FRACTIONAL, usedScaled, "recastAuto", paramsScaled);
+        emit VoteCastWithParams(
+            account,
+            proposalId,
+            VOTE_TYPE_FRACTIONAL,
+            usedScaled,
+            "recastAuto",
+            paramsScaled
+        );
         _tallyUpdated(proposalId);
 
         return usedScaled;
@@ -191,7 +239,8 @@ contract MeritGovernor is
         bytes memory params
     ) internal view returns (uint256) {
         uint32 topicId = _proposalTopic[proposalId]; // 0 if not set
-        uint256 timepoint = proposalSnapshot(proposalId);
+        uint256 snap = proposalSnapshot(proposalId);
+        uint256 timepoint = snap == 0 ? 0 : snap - 1;
 
         uint256 baseVotes = GovernorVotes._getVotes(account, timepoint, params);
         uint256 cap = oracle.weightAtTopic(account, block.timestamp, topicId);

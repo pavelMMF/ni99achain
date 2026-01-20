@@ -6,9 +6,9 @@ import type { TypedContractEvent, TypedDeferredTopicFilter, TypedEventLog, Typed
   
 
   export interface MeritGovernorInterface extends Interface {
-    getFunction(nameOrSignature: "BALLOT_TYPEHASH" | "CLOCK_MODE" | "COUNTING_MODE" | "DEFAULT_ADMIN_ROLE" | "EXTENDED_BALLOT_TYPEHASH" | "VOTE_REFRESHER_ROLE" | "cancel" | "castVote" | "castVoteBySig" | "castVoteWithReason" | "castVoteWithReasonAndParams" | "castVoteWithReasonAndParamsBySig" | "clock" | "eip712Domain" | "execute" | "getProposalId" | "getRoleAdmin" | "getVotes" | "getVotesWithParams" | "grantRole" | "hasRole" | "hasVoted" | "hashProposal" | "name" | "nonces" | "onERC1155BatchReceived" | "onERC1155Received" | "onERC721Received" | "oracle" | "proposalDeadline" | "proposalEta" | "proposalNeedsQueuing" | "proposalProposer" | "proposalSnapshot" | "proposalThreshold" | "proposalTopic" | "proposalVotes" | "propose" | "proposeWithTopic" | "queue" | "quorum" | "recastVote" | "recastVoteAuto" | "relay" | "renounceRole" | "revokeRole" | "setProposalThreshold" | "setVotingDelay" | "setVotingPeriod" | "state" | "supportsInterface" | "token" | "version" | "voteReceipt" | "votingDelay" | "votingPeriod"): FunctionFragment;
+    getFunction(nameOrSignature: "BALLOT_TYPEHASH" | "CLOCK_MODE" | "COUNTING_MODE" | "DEFAULT_ADMIN_ROLE" | "EXTENDED_BALLOT_TYPEHASH" | "VOTE_REFRESHER_ROLE" | "allowed" | "cancel" | "castVote" | "castVoteBySig" | "castVoteWithReason" | "castVoteWithReasonAndParams" | "castVoteWithReasonAndParamsBySig" | "clock" | "eip712Domain" | "execute" | "getProposalId" | "getRoleAdmin" | "getVotes" | "getVotesWithParams" | "grantRole" | "hasRole" | "hasVoted" | "hashProposal" | "name" | "nonces" | "onERC1155BatchReceived" | "onERC1155Received" | "onERC721Received" | "oracle" | "proposalDeadline" | "proposalEta" | "proposalNeedsQueuing" | "proposalProposer" | "proposalSnapshot" | "proposalThreshold" | "proposalTopic" | "proposalVotes" | "propose" | "proposeWithTopic" | "queue" | "quorum" | "recastVote" | "recastVoteAuto" | "relay" | "renounceRole" | "revokeRole" | "setAllowed" | "setProposalThreshold" | "setVotingDelay" | "setVotingPeriod" | "state" | "supportsInterface" | "token" | "version" | "voteReceipt" | "votingDelay" | "votingPeriod"): FunctionFragment;
 
-    getEvent(nameOrSignatureOrTopic: "EIP712DomainChanged" | "ProposalCanceled" | "ProposalCreated" | "ProposalExecuted" | "ProposalQueued" | "ProposalThresholdSet" | "ProposalTopicSet" | "RoleAdminChanged" | "RoleGranted" | "RoleRevoked" | "VoteCast" | "VoteCastWithParams" | "VotingDelaySet" | "VotingPeriodSet"): EventFragment;
+    getEvent(nameOrSignatureOrTopic: "AllowlistSet" | "EIP712DomainChanged" | "ProposalCanceled" | "ProposalCreated" | "ProposalExecuted" | "ProposalQueued" | "ProposalThresholdSet" | "ProposalTopicSet" | "RoleAdminChanged" | "RoleGranted" | "RoleRevoked" | "VoteCast" | "VoteCastWithParams" | "VotingDelaySet" | "VotingPeriodSet"): EventFragment;
 
     encodeFunctionData(functionFragment: 'BALLOT_TYPEHASH', values?: undefined): string;
 encodeFunctionData(functionFragment: 'CLOCK_MODE', values?: undefined): string;
@@ -16,6 +16,7 @@ encodeFunctionData(functionFragment: 'COUNTING_MODE', values?: undefined): strin
 encodeFunctionData(functionFragment: 'DEFAULT_ADMIN_ROLE', values?: undefined): string;
 encodeFunctionData(functionFragment: 'EXTENDED_BALLOT_TYPEHASH', values?: undefined): string;
 encodeFunctionData(functionFragment: 'VOTE_REFRESHER_ROLE', values?: undefined): string;
+encodeFunctionData(functionFragment: 'allowed', values: [AddressLike]): string;
 encodeFunctionData(functionFragment: 'cancel', values: [AddressLike[], BigNumberish[], BytesLike[], BytesLike]): string;
 encodeFunctionData(functionFragment: 'castVote', values: [BigNumberish, BigNumberish]): string;
 encodeFunctionData(functionFragment: 'castVoteBySig', values: [BigNumberish, BigNumberish, AddressLike, BytesLike]): string;
@@ -56,6 +57,7 @@ encodeFunctionData(functionFragment: 'recastVoteAuto', values: [BigNumberish, Ad
 encodeFunctionData(functionFragment: 'relay', values: [AddressLike, BigNumberish, BytesLike]): string;
 encodeFunctionData(functionFragment: 'renounceRole', values: [BytesLike, AddressLike]): string;
 encodeFunctionData(functionFragment: 'revokeRole', values: [BytesLike, AddressLike]): string;
+encodeFunctionData(functionFragment: 'setAllowed', values: [AddressLike, boolean]): string;
 encodeFunctionData(functionFragment: 'setProposalThreshold', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'setVotingDelay', values: [BigNumberish]): string;
 encodeFunctionData(functionFragment: 'setVotingPeriod', values: [BigNumberish]): string;
@@ -73,6 +75,7 @@ decodeFunctionResult(functionFragment: 'COUNTING_MODE', data: BytesLike): Result
 decodeFunctionResult(functionFragment: 'DEFAULT_ADMIN_ROLE', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'EXTENDED_BALLOT_TYPEHASH', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'VOTE_REFRESHER_ROLE', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'allowed', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'cancel', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'castVote', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'castVoteBySig', data: BytesLike): Result;
@@ -113,6 +116,7 @@ decodeFunctionResult(functionFragment: 'recastVoteAuto', data: BytesLike): Resul
 decodeFunctionResult(functionFragment: 'relay', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'renounceRole', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'revokeRole', data: BytesLike): Result;
+decodeFunctionResult(functionFragment: 'setAllowed', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'setProposalThreshold', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'setVotingDelay', data: BytesLike): Result;
 decodeFunctionResult(functionFragment: 'setVotingPeriod', data: BytesLike): Result;
@@ -126,6 +130,18 @@ decodeFunctionResult(functionFragment: 'votingPeriod', data: BytesLike): Result;
   }
 
   
+    export namespace AllowlistSetEvent {
+      export type InputTuple = [account: AddressLike, allowed: boolean];
+      export type OutputTuple = [account: string, allowed: boolean];
+      export interface OutputObject {account: string, allowed: boolean };
+      export type Event = TypedContractEvent<InputTuple, OutputTuple, OutputObject>
+      export type Filter = TypedDeferredTopicFilter<Event>
+      export type Log = TypedEventLog<Event>
+      export type LogDescription = TypedLogDescription<Event>
+    }
+
+  
+
     export namespace EIP712DomainChangedEvent {
       export type InputTuple = [];
       export type OutputTuple = [];
@@ -371,6 +387,14 @@ decodeFunctionResult(functionFragment: 'votingPeriod', data: BytesLike): Result;
     VOTE_REFRESHER_ROLE: TypedContractMethod<
       [],
       [string],
+      'view'
+    >
+    
+
+    
+    allowed: TypedContractMethod<
+      [arg0: AddressLike, ],
+      [boolean],
       'view'
     >
     
@@ -696,6 +720,14 @@ decodeFunctionResult(functionFragment: 'votingPeriod', data: BytesLike): Result;
     
 
     
+    setAllowed: TypedContractMethod<
+      [account: AddressLike, isAllowed: boolean, ],
+      [void],
+      'nonpayable'
+    >
+    
+
+    
     setProposalThreshold: TypedContractMethod<
       [newProposalThreshold: BigNumberish, ],
       [void],
@@ -806,6 +838,11 @@ getFunction(nameOrSignature: 'EXTENDED_BALLOT_TYPEHASH'): TypedContractMethod<
 getFunction(nameOrSignature: 'VOTE_REFRESHER_ROLE'): TypedContractMethod<
       [],
       [string],
+      'view'
+    >;
+getFunction(nameOrSignature: 'allowed'): TypedContractMethod<
+      [arg0: AddressLike, ],
+      [boolean],
       'view'
     >;
 getFunction(nameOrSignature: 'cancel'): TypedContractMethod<
@@ -1008,6 +1045,11 @@ getFunction(nameOrSignature: 'revokeRole'): TypedContractMethod<
       [void],
       'nonpayable'
     >;
+getFunction(nameOrSignature: 'setAllowed'): TypedContractMethod<
+      [account: AddressLike, isAllowed: boolean, ],
+      [void],
+      'nonpayable'
+    >;
 getFunction(nameOrSignature: 'setProposalThreshold'): TypedContractMethod<
       [newProposalThreshold: BigNumberish, ],
       [void],
@@ -1059,7 +1101,8 @@ getFunction(nameOrSignature: 'votingPeriod'): TypedContractMethod<
       'view'
     >;
 
-    getEvent(key: 'EIP712DomainChanged'): TypedContractEvent<EIP712DomainChangedEvent.InputTuple, EIP712DomainChangedEvent.OutputTuple, EIP712DomainChangedEvent.OutputObject>;
+    getEvent(key: 'AllowlistSet'): TypedContractEvent<AllowlistSetEvent.InputTuple, AllowlistSetEvent.OutputTuple, AllowlistSetEvent.OutputObject>;
+getEvent(key: 'EIP712DomainChanged'): TypedContractEvent<EIP712DomainChangedEvent.InputTuple, EIP712DomainChangedEvent.OutputTuple, EIP712DomainChangedEvent.OutputObject>;
 getEvent(key: 'ProposalCanceled'): TypedContractEvent<ProposalCanceledEvent.InputTuple, ProposalCanceledEvent.OutputTuple, ProposalCanceledEvent.OutputObject>;
 getEvent(key: 'ProposalCreated'): TypedContractEvent<ProposalCreatedEvent.InputTuple, ProposalCreatedEvent.OutputTuple, ProposalCreatedEvent.OutputObject>;
 getEvent(key: 'ProposalExecuted'): TypedContractEvent<ProposalExecutedEvent.InputTuple, ProposalExecutedEvent.OutputTuple, ProposalExecutedEvent.OutputObject>;
@@ -1076,6 +1119,10 @@ getEvent(key: 'VotingPeriodSet'): TypedContractEvent<VotingPeriodSetEvent.InputT
 
     filters: {
       
+      'AllowlistSet(address,bool)': TypedContractEvent<AllowlistSetEvent.InputTuple, AllowlistSetEvent.OutputTuple, AllowlistSetEvent.OutputObject>;
+      AllowlistSet: TypedContractEvent<AllowlistSetEvent.InputTuple, AllowlistSetEvent.OutputTuple, AllowlistSetEvent.OutputObject>;
+    
+
       'EIP712DomainChanged()': TypedContractEvent<EIP712DomainChangedEvent.InputTuple, EIP712DomainChangedEvent.OutputTuple, EIP712DomainChangedEvent.OutputObject>;
       EIP712DomainChanged: TypedContractEvent<EIP712DomainChangedEvent.InputTuple, EIP712DomainChangedEvent.OutputTuple, EIP712DomainChangedEvent.OutputObject>;
     

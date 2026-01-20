@@ -10,25 +10,29 @@ import * as Contracts from "./index.js";
 
 declare module "@nomicfoundation/hardhat-ethers/types" {
   interface HardhatEthersHelpers extends HardhatEthersHelpersBase {
-  getContractFactory(name: 'Counter', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.Counter__factory>
+  getContractFactory(name: 'AuditLog', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.AuditLog__factory>
+getContractFactory(name: 'Counter', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.Counter__factory>
 getContractFactory(name: 'GovToken', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.GovToken__factory>
 getContractFactory(name: 'GovernorCountingFractionalRebalance', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.GovernorCountingFractionalRebalance__factory>
 getContractFactory(name: 'MeritGovernor', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.MeritGovernor__factory>
 getContractFactory(name: 'MeritOracle', signerOrOptions?: ethers.Signer | FactoryOptions): Promise<Contracts.MeritOracle__factory>
 
-  getContractAt(name: 'Counter', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.Counter>
+  getContractAt(name: 'AuditLog', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.AuditLog>
+getContractAt(name: 'Counter', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.Counter>
 getContractAt(name: 'GovToken', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.GovToken>
 getContractAt(name: 'GovernorCountingFractionalRebalance', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.GovernorCountingFractionalRebalance>
 getContractAt(name: 'MeritGovernor', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.MeritGovernor>
 getContractAt(name: 'MeritOracle', address: string | ethers.Addressable, signer?: ethers.Signer): Promise<Contracts.MeritOracle>
 
-  deployContract(name: 'Counter', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.Counter>
+  deployContract(name: 'AuditLog', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.AuditLog>
+deployContract(name: 'Counter', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.Counter>
 deployContract(name: 'GovToken', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.GovToken>
 deployContract(name: 'GovernorCountingFractionalRebalance', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.GovernorCountingFractionalRebalance>
 deployContract(name: 'MeritGovernor', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.MeritGovernor>
 deployContract(name: 'MeritOracle', signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.MeritOracle>
 
-  deployContract(name: 'Counter', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.Counter>
+  deployContract(name: 'AuditLog', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.AuditLog>
+deployContract(name: 'Counter', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.Counter>
 deployContract(name: 'GovToken', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.GovToken>
 deployContract(name: 'GovernorCountingFractionalRebalance', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.GovernorCountingFractionalRebalance>
 deployContract(name: 'MeritGovernor', args: any[], signerOrOptions?: ethers.Signer | DeployContractOptions): Promise<Contracts.MeritGovernor>

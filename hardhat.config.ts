@@ -4,8 +4,17 @@ import hardhatViem from "@nomicfoundation/hardhat-viem";
 import hardhatIgnition from "@nomicfoundation/hardhat-ignition";
 import "dotenv/config";
 
-const sepoliaUrl = process.env.SEPOLIA_RPC_URL;
-const sepoliaPk = process.env.SEPOLIA_PRIVATE_KEY;
+function normalizePk(pk?: string) {
+  const s = (pk ?? "").trim();
+  if (!s) return "";
+  return s.startsWith("0x") ? s : `0x${s}`;
+}
+
+const sepoliaUrl = (process.env.SEPOLIA_RPC_URL ?? "").trim();
+const sepoliaPk = normalizePk(process.env.SEPOLIA_PRIVATE_KEY);
+
+const homeUrl = (process.env.HOME_RPC_URL ?? "http://127.0.0.1:8545").trim();
+const homePk = normalizePk(process.env.HOME_PRIVATE_KEY); // ОБЯЗАТЕЛЬНО 0x...
 
 export default defineConfig({
   plugins: [hardhatToolboxMochaEthersPlugin, hardhatViem, hardhatIgnition],
@@ -15,22 +24,18 @@ export default defineConfig({
       default: { version: "0.8.28" },
       production: {
         version: "0.8.28",
-        settings: {
-          optimizer: { enabled: true, runs: 200 },
-        },
+        settings: { optimizer: { enabled: true, runs: 200 } },
       },
     },
   },
 
   networks: {
-    hardhatMainnet: { type: "edr-simulated", chainType: "l1", chainId: 77777 },
-    hardhatOp: { type: "edr-simulated", chainType: "op", chainId: 77777 },
     homedao: {
       type: "http",
       chainType: "l1",
-      url: "http://127.0.0.1:8545",
-      chainId: 77777,
-      accounts: [process.env.DEPLOYER_PRIVATE_KEY!],
+      url: homeUrl,
+      chainId: 1337,
+      accounts: homePk ? [homePk] : [],
     },
 
     ...(sepoliaUrl && sepoliaPk
