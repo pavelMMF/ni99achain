@@ -1,6 +1,5 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { HashRouter } from 'react-router-dom'
 
 import '@fontsource/fira-sans/cyrillic-400.css'
 import '@fontsource/fira-sans/cyrillic-500.css'
@@ -18,11 +17,15 @@ import '@fontsource/unbounded/700.css'
 import '@fontsource/fira-code/500.css'
 import './styles/global.css'
 import './styles/participation.css'
+import './styles-organizationApplications.css'
+import './styles-landing-dialog.css'
+import './styles-logic-source.css'
 
 import App from './App'
 import { AppProviders } from './demo/store'
 import { installSoundDelegate } from './sound/engine'
 import { SessionProvider } from './auth/session'
+import { canonicalizeOrganizationLocation, OrganizationRouter } from './tenancy/OrganizationRouter'
 
 installSoundDelegate()
 
@@ -48,14 +51,16 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   }
 }
 
+const initialOrganizationRoute = canonicalizeOrganizationLocation()
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <SessionProvider>
-      <HashRouter>
+    <OrganizationRouter initialRoute={initialOrganizationRoute}>
+      <SessionProvider>
         <AppProviders>
           <App />
         </AppProviders>
-      </HashRouter>
-    </SessionProvider>
+      </SessionProvider>
+    </OrganizationRouter>
   </StrictMode>,
 )

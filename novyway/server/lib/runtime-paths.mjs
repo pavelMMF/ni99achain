@@ -10,6 +10,7 @@ export const postgresBin = join(postgresRoot, 'pgsql', 'bin')
 export const postgresData = join(dataRoot, 'postgres-data')
 export const postgresLog = join(dataRoot, 'logs', 'postgresql.log')
 export const databaseConfigPath = join(secretsRoot, 'database.json')
+export const databaseAdminConfigPath = join(secretsRoot, 'database-admin.json')
 
 for (const directory of [backupRoot, secretsRoot, join(dataRoot, 'logs')]) {
   mkdirSync(directory, { recursive: true })

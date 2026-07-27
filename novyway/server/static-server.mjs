@@ -7,9 +7,11 @@ import { spawn } from 'node:child_process'
 import { deserializeSignInOutput, verifySignInMessage, verifySignInSignature } from '@aptos-labs/siwa'
 import { z } from 'zod'
 import {
+  aptosAccountBalance,
   aptosClient,
   aptosRuntime,
   aptosStatus,
+  createOrganizationRelayer,
   governanceAccess,
   governanceCreator,
   qualificationSnapshot,
@@ -110,9 +112,71 @@ import {
   publishDocumentProposal,
   recordDocumentProposalFinalization,
 } from './lib/storage.mjs'
-import { decryptManagedPrivateKey, encryptManagedPrivateKey, hashEmailCode, hashPassword, verifyOperatorToken, verifyPassword } from './lib/credentials.mjs'
+import {
+  DEFAULT_ORGANIZATION_ID,
+  DEFAULT_ORGANIZATION_SLUG,
+  configureOrganizationSponsor,
+  configureOrganizationNotificationIntegration,
+  findOrganizationByDomain,
+  findOrganizationBySlug,
+  getOrganizationConfig,
+  getOrganizationMembership,
+  getOrganizationNotificationIntegration,
+  getOrganizationSponsor,
+  initializeTenantStorage,
+  loadOrganizationNotificationSecret,
+  loadOrganizationSponsorSignerMaterial,
+  markOrganizationSponsorUsage,
+  reserveOrganizationSponsorUsage,
+  removeOrganizationNotificationIntegration,
+  registerOrganizationDomain,
+  syncDefaultOrganizationMembership,
+  updateOrganizationProfile,
+  updateOrganizationSettings,
+} from './lib/tenant-storage.mjs'
+import {
+  createOrganizationApplication,
+  getOrganizationApplicationForCreator,
+  initializeOrganizationApplications,
+  isSafeOrganizationMultilineText,
+  listOrganizationApplicationsForCreator,
+  listOrganizationApplicationsForReview,
+  purgeExpiredRejectedApplications,
+  reviewOrganizationApplication,
+  submitOrganizationApplication,
+  updateOrganizationApplication,
+} from './lib/organization-applications.mjs'
+import {
+  filterAccessibleResourceIds,
+  getAccessConsole,
+  getResourcePermissions,
+  initializeOrganizationAccess,
+  putAccessDelegation,
+  putAccessGrant,
+  putAccessRole,
+  putResourceAccess,
+  putVerifiedExamResult,
+  putVerifiedQualificationResult,
+  requireResourceAccess,
+  resolveOrganizationAccess,
+  revokeAccessGrant,
+} from './lib/organization-access.mjs'
+import {
+  decryptManagedPrivateKey,
+  decryptOrganizationNotificationToken,
+  decryptOrganizationRelayerPrivateKey,
+  encryptManagedPrivateKey,
+  encryptOrganizationNotificationToken,
+  encryptOrganizationRelayerPrivateKey,
+  hashEmailCode,
+  hashPassword,
+  verifyOperatorToken,
+  verifyPassword,
+} from './lib/credentials.mjs'
+import { enforceOrganizationOrigin, resolveOrganizationRequest } from './lib/organization-context.mjs'
+import { resolveOrganizationPermissions } from './lib/authorization.mjs'
 import { emailDeliveryConfigured, sendPasswordChangedNotice, sendVerificationCode } from './lib/mailer.mjs'
-import { getLogicChallenge, logicChallenges, presentLogicChallenge, scoreLogicAnswer } from './lib/logic-game.mjs'
+import { filterLogicChallenges, getLogicChallenge, logicChallenges, presentLogicChallenge, scoreLogicAnswer } from './lib/logic-game.mjs'
 
 import { canonicalJson, createProposalPayload, proposalSha256 } from './lib/document-proposal.mjs'
 const webRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -130,6 +194,31 @@ const startedAt = new Date().toISOString()
 // Sponsorship stays fail-closed until the published modules can be reproduced
 const publicSiteOrigin = (process.env.PUBLIC_SITE_ORIGIN ?? 'https://novyway.com').replace(/\/$/, '')
 const proposalLaunchQuorumBps = 1_000
+
+async function telegramBotRequest(token, method, payload = null) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 8_000)
+  try {
+    let response
+    try {
+      response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+        method: payload ? 'POST' : 'GET',
+        headers: payload ? { 'Content-Type': 'application/json' } : undefined,
+        body: payload ? JSON.stringify(payload) : undefined,
+        signal: controller.signal,
+      })
+    } catch {
+      throw Object.assign(new Error('telegram_service_unavailable'), { status: 503 })
+    }
+    const body = await response.json().catch(() => null)
+    if (!response.ok || body?.ok !== true) {
+      throw Object.assign(new Error('telegram_bot_request_failed'), { status: 422 })
+    }
+    return body.result
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 const proposalSupportWindowDays = 30
 // from the reviewed Move source and toolchain, not merely matched by byte hash.
 const sponsorshipLocked = process.env.SPONSORSHIP_EMERGENCY_LOCK === '1'
@@ -294,12 +383,142 @@ const opsSettingsSchema = z.object({
 const creatorBootstrapSchema = z.object({
   password: passwordSchema,
 }).strict()
-const logicRoundSchema = z.object({ lang: z.enum(['ru', 'en']).default('ru') })
+const logicRoundSchema = z.object({
+  lang: z.enum(['ru', 'en']).default('ru'),
+  origin: z.enum(['all', 'documented', 'life', 'fiction']).default('documented'),
+  difficulty: z.union([z.literal('all'), z.literal(1), z.literal(2), z.literal(3)]).default('all'),
+}).strict()
 const logicAnswerSchema = z.object({
   roundToken: z.string().min(24).max(128),
   selectedIndex: z.number().int().min(0).max(7),
 })
 
+const safeOrganizationText = z.string().trim().regex(/^[^\u0000-\u001f\u007f<>]+$/)
+const safeOptionalOrganizationText = z.string().trim().max(2000)
+  .refine((value) => isSafeOrganizationMultilineText(value), 'invalid_organization_description')
+const reservedOrganizationSlugs = new Set([
+  'www', 'api', 'admin', 'app', 'assets', 'auth', 'cdn', 'mail', 'novyway', 'status', 'static', 'support', 'operator', 'ops',
+])
+const organizationCreateSchema = z.object({
+  slug: z.string().trim().toLowerCase().min(2).max(63).regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/).refine((value) => !reservedOrganizationSlugs.has(value), 'reserved_organization_slug'),
+  name: safeOrganizationText.min(2).max(120),
+  description: safeOptionalOrganizationText.default(''),
+  visibility: z.enum(['public', 'unlisted', 'members_only']).default('members_only'),
+}).strict()
+const organizationApplicationUpdateSchema = z.object({
+  expectedRevision: z.number().int().min(1),
+  setup: z.record(z.string(), z.unknown()),
+}).strict()
+const organizationApplicationSubmitSchema = z.object({
+  expectedRevision: z.number().int().min(1),
+}).strict()
+const organizationApplicationReviewSchema = z.object({
+  expectedRevision: z.number().int().min(1),
+  decision: z.enum(['approve', 'changes_requested', 'reject']),
+  message: z.string().trim().max(4000).default(''),
+}).strict()
+const organizationTelegramBotSchema = z.object({
+  token: z.string().trim().regex(/^[0-9]{6,16}:[A-Za-z0-9_-]{30,100}$/),
+  defaultChatId: z.string().trim().regex(/^-?[0-9]{5,63}$/).nullable().optional(),
+}).strict()
+const organizationBrandSchema = z.object({
+  displayName: safeOrganizationText.min(2).max(80),
+  shortName: safeOrganizationText.min(2).max(24),
+  accentColor: z.string().regex(/^#[0-9a-f]{6}$/i),
+  logoUrl: z.union([z.literal(''), z.string().url().max(512)]).optional(),
+}).strict()
+const aptosAddressSchema = z.string().trim().toLowerCase().regex(/^0x[0-9a-f]{64}$/)
+const organizationProfileSchema = z.object({
+  name: safeOrganizationText.min(2).max(120).optional(),
+  description: safeOptionalOrganizationText.optional(),
+  visibility: z.enum(['public', 'unlisted', 'members_only']).optional(),
+  brand: organizationBrandSchema.optional(),
+  status: z.enum(['draft', 'active']).optional(),
+  aptosNetwork: z.enum(['testnet', 'mainnet', 'devnet', 'local']).optional(),
+  aptosModuleAddress: aptosAddressSchema.nullable().optional(),
+  aptosOrganizationAddress: aptosAddressSchema.nullable().optional(),
+}).strict()
+const organizationSettingsSchema = z.object({
+  locale: z.enum(['ru', 'en']).optional(),
+  governance: z.record(z.string(), z.unknown()).optional(),
+  qualification: z.record(z.string(), z.unknown()).optional(),
+  features: z.record(z.string(), z.unknown()).optional(),
+}).strict()
+const organizationSponsorSchema = z.object({
+  perTransactionLimitOctas: z.number().int().min(1).max(10_000_000).default(1_000_000),
+  perUserDailyLimitOctas: z.number().int().min(1).max(100_000_000).default(5_000_000),
+  dailyBudgetOctas: z.number().int().min(1).max(10_000_000_000).default(100_000_000),
+}).strict()
+const organizationDomainSchema = z.object({
+  hostname: z.string().trim().toLowerCase().max(253).regex(/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/),
+  isPrimary: z.boolean().default(false),
+}).strict()
+
+const localizedAccessTextSchema = z.object({
+  ru: safeOrganizationText.min(1).max(120),
+  en: safeOrganizationText.min(1).max(120),
+}).strict()
+const accessConditionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('tenure_days_at_least'), days: z.number().int().min(0).max(36_500) }).strict(),
+  z.object({ kind: z.literal('verified_exam_passed'), examId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/), minScoreBps: z.number().int().min(0).max(10_000) }).strict(),
+  z.object({ kind: z.literal('qualification_level_at_least'), categoryId: z.string().regex(/^\d+$/), level: z.number().int().min(0).max(3) }).strict(),
+])
+const accessRoleSchema = z.object({
+  key: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,47}$/),
+  name: localizedAccessTextSchema,
+  description: localizedAccessTextSchema,
+  enabled: z.boolean().default(true),
+  autoRule: z.object({ mode: z.enum(['all', 'any']).default('all'), conditions: z.array(accessConditionSchema).max(20) }).nullable().default(null),
+  capabilities: z.array(z.string().trim().min(2).max(80)).max(40).default([]),
+}).strict()
+const accessGrantSchema = z.object({
+  key: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,47}$/),
+  userId: z.string().uuid(),
+  expiresAt: z.string().datetime().nullable().default(null),
+}).strict()
+const accessDelegationSchema = z.object({
+  key: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,47}$/),
+  administratorUserId: z.string().uuid(),
+  canGrant: z.boolean(),
+  canEditRules: z.boolean(),
+}).strict()
+const resourceAudienceSchema = z.object({
+  audience: z.enum(['public', 'member', 'roles']),
+  requiredRoles: z.array(z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,47}$/)).max(20).default([]),
+}).strict()
+const resourceAccessSchema = z.object({
+  type: z.enum(['election', 'document', 'exam', 'workspace']),
+  id: z.string().trim().min(1).max(200),
+  audience: z.enum(['public', 'member', 'roles']),
+  requiredRoles: z.array(z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{1,47}$/)).max(20).default([]),
+  policies: z.object({
+    discover: resourceAudienceSchema.optional(),
+    subject: resourceAudienceSchema.optional(),
+    participate: resourceAudienceSchema.optional(),
+    results: resourceAudienceSchema.optional(),
+    ballots: resourceAudienceSchema.optional(),
+    content: resourceAudienceSchema.optional(),
+  }).strict().optional(),
+}).strict()
+const verifiedExamEvidenceSchema = z.object({
+  userId: z.string().uuid(),
+  examId: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
+  scoreBps: z.number().int().min(0).max(10_000),
+  passedAt: z.string().datetime().optional(),
+  evidenceHash: z.string().trim().max(200).nullable().default(null),
+}).strict()
+const verifiedQualificationEvidenceSchema = z.object({
+  userId: z.string().uuid(),
+  categoryId: z.string().trim().regex(/^[0-9]{1,20}$/),
+  level: z.number().int().min(0).max(3),
+  eligible: z.boolean().default(true),
+  evidenceHash: z.string().trim().max(200).nullable().default(null),
+}).strict()
+const accessFilterSchema = z.object({
+  type: z.enum(['election', 'document', 'exam', 'workspace']),
+  ids: z.array(z.string().trim().min(1).max(200)).max(500),
+  scope: z.enum(['discover', 'subject', 'participate', 'results', 'ballots', 'content']).optional(),
+}).strict()
 function resolvePath(root, pathname) {
   const relative = normalize(decodeURIComponent(pathname).replace(/^[/\\]+/, ''))
   const candidate = resolve(root, relative)
@@ -398,40 +617,114 @@ async function isProtectedCreatorAccount(row) {
   }
 }
 
-async function permissionsFor(row) {
+function organizationIdForRequest(request) {
+  return request.organizationContext?.organizationId ?? DEFAULT_ORGANIZATION_ID
+}
+
+async function permissionsFor(row, organizationId = DEFAULT_ORGANIZATION_ID) {
+  const userId = row?.user_id ?? row?.id
+  const membership = userId ? await getOrganizationMembership(organizationId, userId) : null
+  const organizationRole = membership?.status === 'active' ? membership.role : null
+  const isDefaultOrganization = organizationId === DEFAULT_ORGANIZATION_ID
   const signerAddress = row?.auth_method === 'aptos_signature' && typeof row?.auth_address === 'string'
     ? row.auth_address.toLowerCase()
     : null
-  if (!row?.aptos_address || !signerAddress) return { isAdmin: false, isSuperAdmin: false }
-  try {
-    const [signerAccess, protectedCreator] = await Promise.all([
-      governanceAccess(signerAddress),
-      isProtectedCreatorAccount(row),
-    ])
-    return {
-      isAdmin: signerAccess.isAdmin,
-      isSuperAdmin: protectedCreator && signerAccess.isCreator,
-    }
-  } catch {
-    return { isAdmin: false, isSuperAdmin: false }
+
+  let signerAccess = null
+  if (signerAddress) {
+    try { signerAccess = await governanceAccess(signerAddress) } catch { signerAccess = null }
+  }
+
+  let protectedCreator = false
+  if (isDefaultOrganization) {
+    try { protectedCreator = await isProtectedCreatorAccount(row) } catch { protectedCreator = false }
+  }
+
+  return resolveOrganizationPermissions({
+    organizationRole,
+    protectedCreator,
+    legacyRole: row?.role ?? 'voter',
+    signerAccess,
+    isDefaultOrganization,
+  })
+}
+
+async function exposedUser(row, csrfToken, organizationId = DEFAULT_ORGANIZATION_ID) {
+  return publicUser(row, csrfToken, await permissionsFor(row, organizationId))
+}
+
+function activeMembership(membership) {
+  return membership?.status === 'active' ? membership : null
+}
+
+function organizationAccessFor(configuration, membership) {
+  const visibility = configuration?.organization?.visibility ?? 'public'
+  const member = activeMembership(membership)
+  return {
+    visibility,
+    memberOnly: visibility === 'members_only',
+    canViewWorkspace: visibility !== 'members_only' || Boolean(member),
   }
 }
 
-async function exposedUser(row, csrfToken) {
-  return publicUser(row, csrfToken, await permissionsFor(row))
+function organizationPublicShell(configuration, membership) {
+  if (!configuration) return null
+  const access = organizationAccessFor(configuration, membership)
+  if (access.canViewWorkspace) return { ...configuration, access, membership }
+  return {
+    organization: configuration.organization,
+    locale: configuration.locale,
+    features: {},
+    schemaVersion: configuration.schemaVersion,
+    membership: null,
+    access,
+  }
 }
 
-async function requireSuperAdmin(request) {
+async function requireSuperAdmin(request, organizationId = organizationIdForRequest(request)) {
   const session = await requireSession(request)
-  const permissions = await permissionsFor(session)
+  const permissions = await permissionsFor(session, organizationId)
   if (!permissions.isSuperAdmin) throw Object.assign(new Error('super_admin_required'), { status: 403 })
   return session
 }
 
-async function requireGovernanceAdmin(request) {
+function requirePlatformRequest(request) {
+  if (request.organizationContext?.explicit) {
+    throw Object.assign(new Error('not_found'), { status: 404 })
+  }
+}
+
+async function requirePlatformSuperAdmin(request) {
+  requirePlatformRequest(request)
   const session = await requireSession(request)
-  const permissions = await permissionsFor(session)
+  if (!await isProtectedCreatorAccount(session)) {
+    throw Object.assign(new Error('platform_super_admin_required'), { status: 403 })
+  }
+  return session
+}
+
+async function requireGovernanceAdmin(request, organizationId = organizationIdForRequest(request)) {
+  const session = await requireSession(request)
+  const permissions = await permissionsFor(session, organizationId)
   if (!permissions.isAdmin) throw Object.assign(new Error('governance_admin_required'), { status: 403 })
+  return session
+}
+
+async function requireOrganizationOwner(request, organizationId = organizationIdForRequest(request)) {
+  const session = await requireSession(request)
+  const membership = await getOrganizationMembership(organizationId, session.user_id)
+  if (membership?.status !== 'active' || membership.role !== 'owner') {
+    throw Object.assign(new Error('organization_owner_required'), { status: 403 })
+  }
+  return session
+}
+
+async function requireOrganizationAdmin(request, organizationId = organizationIdForRequest(request)) {
+  const session = await requireSession(request)
+  const membership = await getOrganizationMembership(organizationId, session.user_id)
+  if (membership?.status !== 'active' || !['owner', 'governance_admin'].includes(membership.role)) {
+    throw Object.assign(new Error('organization_admin_required'), { status: 403 })
+  }
   return session
 }
 
@@ -441,6 +734,51 @@ function votingAddressFor(session) {
   }
   if (session.wallet_kind === 'managed') return session.aptos_address.toLowerCase()
   throw Object.assign(new Error('aptos_signature_required'), { status: 403 })
+}
+
+const sponsoredVoteReservedOctas = 1_000_000
+
+async function sponsoredWriteContext({ request, session, settings, idempotencyKey, intentKind }) {
+  const organizationId = organizationIdForRequest(request)
+  if (organizationId === DEFAULT_ORGANIZATION_ID) {
+    if (!settings.sponsorshipEnabled) throw Object.assign(new Error('sponsorship_disabled'), { status: 503 })
+    const chain = await aptosStatus()
+    if (!chain.sourceParityVerified) throw Object.assign(new Error('contract_source_mismatch'), { status: 503 })
+    if (!chain.ok || Number(chain.relayerBalanceOctas ?? 0) < sponsoredVoteReservedOctas) {
+      throw Object.assign(new Error('relayer_unfunded'), { status: 503 })
+    }
+    if (await countRecentSponsoredVotes(session.user_id, organizationId) >= settings.maxSponsoredVotesPerHour) {
+      throw Object.assign(new Error('sponsorship_rate_limited'), { status: 429 })
+    }
+    if (await countRecentSponsoredVotes(null, organizationId) >= settings.maxSponsoredVotesGlobalPerHour * 4) {
+      throw Object.assign(new Error('sponsorship_global_rate_limited'), { status: 429 })
+    }
+    return { organizationId, feePayerAddress: aptosRuntime.relayerAddress, feePayerPrivateKey: null, usageIdempotencyKey: null }
+  }
+
+  const sponsor = await loadOrganizationSponsorSignerMaterial(organizationId)
+  if (!sponsor || sponsor.status !== 'active') throw Object.assign(new Error('organization_sponsorship_unavailable'), { status: 503 })
+  if (sponsor.custodyKind !== 'server_encrypted' || !sponsor.encryptedPrivateKey) {
+    throw Object.assign(new Error('organization_sponsor_external_signer_not_configured'), { status: 503 })
+  }
+  const [chain, balanceOctas] = await Promise.all([aptosStatus(), aptosAccountBalance(sponsor.publicAddress)])
+  if (!chain.sourceParityVerified) throw Object.assign(new Error('contract_source_mismatch'), { status: 503 })
+  if (!chain.ok || Number(balanceOctas ?? 0) < sponsoredVoteReservedOctas) {
+    throw Object.assign(new Error('organization_relayer_unfunded'), { status: 503 })
+  }
+  await reserveOrganizationSponsorUsage({
+    organizationId,
+    userId: session.user_id,
+    idempotencyKey,
+    intentKind,
+    reservedOctas: sponsoredVoteReservedOctas,
+  })
+  return {
+    organizationId,
+    feePayerAddress: sponsor.publicAddress,
+    feePayerPrivateKey: decryptOrganizationRelayerPrivateKey(sponsor.encryptedPrivateKey),
+    usageIdempotencyKey: idempotencyKey,
+  }
 }
 
 async function startSession(response, request, user, authMethod = 'password', authAddress = null) {
@@ -454,7 +792,8 @@ async function startSession(response, request, user, authMethod = 'password', au
   const expiresAt = new Date(Date.now() + lifetimeSeconds * 1000).toISOString()
   await createSession({ userId: user.id, token, csrfToken, expiresAt, authMethod, authAddress })
   const secure = requestOrigin(request).origin.startsWith('https:')
-  return { user: await exposedUser({ ...user, auth_method: authMethod, auth_address: authAddress }, csrfToken), cookies: [sessionCookie(token, lifetimeSeconds, secure), csrfCookie(csrfToken, lifetimeSeconds, secure)] }
+  const organizationId = organizationIdForRequest(request)
+  return { user: await exposedUser({ ...user, auth_method: authMethod, auth_address: authAddress }, csrfToken, organizationId), cookies: [sessionCookie(token, lifetimeSeconds, secure), csrfCookie(csrfToken, lifetimeSeconds, secure)] }
 }
 
 async function issueEmailCode({ user, email, deliveryEmail = email, purpose, lang, parentVerificationId = null }) {
@@ -481,7 +820,8 @@ function requireCsrf(request, session) {
   }
 }
 
-async function handlePublicApi(request, response, url) {
+async function handlePublicApi(request, response, url, organizationContext) {
+  enforceOrganizationOrigin(request, organizationContext)
   if (request.method !== 'GET' && request.method !== 'HEAD' && url.pathname !== '/api/auth/logout') {
     const settings = await getSettings()
     if (settings.maintenanceMode) return json(response, 503, { error: 'maintenance_mode' }, { 'Retry-After': '300' })
@@ -501,9 +841,357 @@ async function handlePublicApi(request, response, url) {
       legalNotice: publicMusicEnabled ? null : 'Local preview only. Set PUBLIC_MUSIC_ENABLED to true in server/static-server.mjs to enable on the public site.',
     }, { 'Cache-Control': 'no-store' })
   }
+  const publicOrganizationConfigMatch = url.pathname.match(/^\/api\/organizations\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\/config$/)
+  if (publicOrganizationConfigMatch && request.method === 'GET') {
+    const organization = await findOrganizationBySlug(publicOrganizationConfigMatch[1])
+    if (!organization || organization.status !== 'active') return json(response, 404, { error: 'organization_not_found' })
+    const session = await sessionFromRequest(request)
+    const [configuration, membership] = await Promise.all([
+      getOrganizationConfig(organization.id),
+      session ? getOrganizationMembership(organization.id, session.user_id) : null,
+    ])
+    const exposedConfiguration = organizationPublicShell(configuration, membership)
+    return json(response, 200, {
+      ...exposedConfiguration,
+      verification: { status: 'verified', orgSlug: organization.slug, verifiedAt: new Date().toISOString() },
+    }, { 'Cache-Control': 'no-store' })
+  }
   if (url.pathname === '/api/config' && request.method === 'GET') {
-    const settings = await getSettings()
-    return json(response, 200, { network: 'testnet', moduleAddress: aptosRuntime.moduleAddress, features: { accounts: true, aptosConnect: true, passwordAccounts: true, emailDelivery: emailDeliveryConfigured(), sponsoredVotes: settings.sponsorshipEnabled && !sponsorshipLocked } })
+    const session = await sessionFromRequest(request)
+    const [settings, configuration, membership] = await Promise.all([
+      getSettings(),
+      getOrganizationConfig(organizationContext.organizationId),
+      session ? getOrganizationMembership(organizationContext.organizationId, session.user_id) : null,
+    ])
+    const exposedConfiguration = organizationPublicShell(configuration, membership)
+    const access = organizationAccessFor(configuration, membership)
+    const sponsorEnabled = access.canViewWorkspace && (configuration?.sponsor?.status === 'active'
+      || (organizationContext.organizationId === DEFAULT_ORGANIZATION_ID && settings.sponsorshipEnabled))
+    return json(response, 200, {
+      network: configuration?.organization?.aptos?.network ?? 'testnet',
+      moduleAddress: configuration?.organization?.aptos?.moduleAddress ?? aptosRuntime.moduleAddress,
+      organization: exposedConfiguration,
+      features: {
+        accounts: true,
+        aptosConnect: true,
+        passwordAccounts: true,
+        emailDelivery: emailDeliveryConfigured(),
+        sponsoredVotes: sponsorEnabled && !sponsorshipLocked,
+      },
+    })
+  }
+  if (url.pathname === '/api/organization' && request.method === 'GET') {
+    const session = await sessionFromRequest(request)
+    const [configuration, membership] = await Promise.all([
+      getOrganizationConfig(organizationContext.organizationId),
+      session ? getOrganizationMembership(organizationContext.organizationId, session.user_id) : null,
+    ])
+    return json(response, 200, organizationPublicShell(configuration, membership), { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/me' && request.method === 'GET') {
+    const session = await sessionFromRequest(request)
+    const access = await resolveOrganizationAccess(organizationContext.organizationId, session?.user_id ?? null)
+    return json(response, 200, { access }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access' && request.method === 'GET') {
+    const session = await requireOrganizationAdmin(request)
+    const access = await getAccessConsole(organizationContext.organizationId, session.user_id)
+    return json(response, 200, { access }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/roles' && request.method === 'PUT') {
+    const session = await requireOrganizationAdmin(request)
+    requireCsrf(request, session)
+    const input = accessRoleSchema.parse(await readJson(request, 64_000))
+    const role = await putAccessRole({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 200, { role }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/grants' && request.method === 'PUT') {
+    const session = await requireOrganizationAdmin(request)
+    requireCsrf(request, session)
+    const input = accessGrantSchema.parse(await readJson(request, 8_192))
+    await putAccessGrant({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 204, null, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/grants' && request.method === 'DELETE') {
+    const session = await requireOrganizationAdmin(request)
+    requireCsrf(request, session)
+    const input = accessGrantSchema.omit({ expiresAt: true }).parse(await readJson(request, 8_192))
+    await revokeAccessGrant({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 204, null, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/delegations' && request.method === 'PUT') {
+    const session = await requireOrganizationOwner(request)
+    requireCsrf(request, session)
+    const input = accessDelegationSchema.parse(await readJson(request, 8_192))
+    await putAccessDelegation({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 204, null, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/resources' && request.method === 'PUT') {
+    const session = await requireOrganizationOwner(request)
+    requireCsrf(request, session)
+    const input = resourceAccessSchema.parse(await readJson(request, 16_384))
+    await putResourceAccess({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 204, null, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/evidence/exams' && request.method === 'PUT') {
+    const session = await requireSession(request)
+    requireCsrf(request, session)
+    const input = verifiedExamEvidenceSchema.parse(await readJson(request, 8_192))
+    await putVerifiedExamResult({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 204, null, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/evidence/qualifications' && request.method === 'PUT') {
+    const session = await requireSession(request)
+    requireCsrf(request, session)
+    const input = verifiedQualificationEvidenceSchema.parse(await readJson(request, 8_192))
+    await putVerifiedQualificationResult({ organizationId: organizationContext.organizationId, actorUserId: session.user_id, ...input })
+    return json(response, 204, null, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/access/filter' && request.method === 'POST') {
+    const session = await sessionFromRequest(request)
+    const input = accessFilterSchema.parse(await readJson(request, 32_768))
+    const ids = await filterAccessibleResourceIds({
+      organizationId: organizationContext.organizationId,
+      userId: session?.user_id ?? null,
+      type: input.type,
+      ids: input.ids,
+      scope: input.scope ?? 'discover',
+    })
+    return json(response, 200, { ids }, { 'Cache-Control': 'no-store' })
+  }
+  const accessResourceMatch = url.pathname.match(/^\/api\/organization\/access\/resources\/(election|document|exam|workspace)\/([^/]+)$/)
+  if (accessResourceMatch && request.method === 'GET') {
+    const session = await sessionFromRequest(request)
+    const resourceType = accessResourceMatch[1]
+    const resourceId = decodeURIComponent(accessResourceMatch[2])
+    const scope = url.searchParams.get('scope') ?? 'discover'
+    await requireResourceAccess({
+      organizationId: organizationContext.organizationId,
+      userId: session?.user_id ?? null,
+      type: resourceType,
+      id: resourceId,
+      scope,
+    })
+    const permissions = await getResourcePermissions({
+      organizationId: organizationContext.organizationId,
+      userId: session?.user_id ?? null,
+      type: resourceType,
+      id: resourceId,
+    })
+    return json(response, 200, { allowed: true, permissions }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organizations' && request.method === 'POST') {
+    return json(response, 410, { error: 'organization_application_required' }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization-applications' && request.method === 'GET') {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    const applications = await listOrganizationApplicationsForCreator(session.user_id)
+    return json(response, 200, { applications }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization-applications' && request.method === 'POST') {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    requireCsrf(request, session)
+    rateLimitIdentifier('organization-application-create', session.user_id, 5, 24 * 60 * 60_000)
+    const input = organizationCreateSchema.parse(await readJson(request, 16_384))
+    const application = await createOrganizationApplication({ ...input, creatorUserId: session.user_id })
+    return json(response, 201, { application }, { 'Cache-Control': 'no-store' })
+  }
+  const organizationApplicationMatch = url.pathname.match(/^\/api\/organization-applications\/([0-9a-f-]{36})$/i)
+  if (organizationApplicationMatch && request.method === 'GET') {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    const application = await getOrganizationApplicationForCreator(organizationApplicationMatch[1], session.user_id)
+    return application
+      ? json(response, 200, { application }, { 'Cache-Control': 'no-store' })
+      : json(response, 404, { error: 'organization_application_not_found' }, { 'Cache-Control': 'no-store' })
+  }
+  if (organizationApplicationMatch && request.method === 'PATCH') {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    requireCsrf(request, session)
+    rateLimitIdentifier('organization-application-update', session.user_id, 180, 60 * 60_000)
+    const input = organizationApplicationUpdateSchema.parse(await readJson(request, 150_000))
+    const application = await updateOrganizationApplication({
+      applicationId: organizationApplicationMatch[1],
+      creatorUserId: session.user_id,
+      ...input,
+    })
+    return json(response, 200, { application }, { 'Cache-Control': 'no-store' })
+  }
+  const organizationApplicationSubmitMatch = url.pathname.match(/^\/api\/organization-applications\/([0-9a-f-]{36})\/submit$/i)
+  if (organizationApplicationSubmitMatch && request.method === 'POST') {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    requireCsrf(request, session)
+    rateLimitIdentifier('organization-application-submit', session.user_id, 12, 24 * 60 * 60_000)
+    const input = organizationApplicationSubmitSchema.parse(await readJson(request, 8_192))
+    const application = await submitOrganizationApplication({
+      applicationId: organizationApplicationSubmitMatch[1],
+      creatorUserId: session.user_id,
+      ...input,
+    })
+    return json(response, 200, { application }, { 'Cache-Control': 'no-store' })
+  }
+  const organizationApplicationBotMatch = url.pathname.match(/^\/api\/organization-applications\/([0-9a-f-]{36})\/notification-bot$/i)
+  if (organizationApplicationBotMatch) {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    const application = await getOrganizationApplicationForCreator(organizationApplicationBotMatch[1], session.user_id)
+    if (!application) return json(response, 404, { error: 'organization_application_not_found' }, { 'Cache-Control': 'no-store' })
+    if (application.status !== 'approved' || !application.approvedOrganizationId) {
+      return json(response, 409, { error: 'organization_not_approved' }, { 'Cache-Control': 'no-store' })
+    }
+
+    if (request.method === 'GET') {
+      const integration = await getOrganizationNotificationIntegration(application.approvedOrganizationId)
+      return json(response, 200, { integration }, { 'Cache-Control': 'no-store' })
+    }
+    if (request.method === 'PUT') {
+      requireCsrf(request, session)
+      rateLimitIdentifier('organization-notification-bot-configure', session.user_id, 10, 24 * 60 * 60_000)
+      const input = organizationTelegramBotSchema.parse(await readJson(request, 8_192))
+      const bot = await telegramBotRequest(input.token, 'getMe')
+      if (!bot?.is_bot || !bot?.id || !bot?.username) {
+        throw Object.assign(new Error('telegram_bot_identity_invalid'), { status: 422 })
+      }
+      const integration = await configureOrganizationNotificationIntegration({
+        organizationId: application.approvedOrganizationId,
+        actorUserId: session.user_id,
+        encryptedToken: encryptOrganizationNotificationToken(input.token),
+        botId: String(bot.id),
+        botUsername: String(bot.username),
+        defaultChatId: input.defaultChatId ?? null,
+      })
+      return json(response, 200, { integration }, { 'Cache-Control': 'no-store' })
+    }
+    if (request.method === 'DELETE') {
+      requireCsrf(request, session)
+      rateLimitIdentifier('organization-notification-bot-remove', session.user_id, 10, 24 * 60 * 60_000)
+      await removeOrganizationNotificationIntegration({
+        organizationId: application.approvedOrganizationId,
+        actorUserId: session.user_id,
+      })
+      return json(response, 200, { removed: true }, { 'Cache-Control': 'no-store' })
+    }
+  }
+  const organizationApplicationBotTestMatch = url.pathname.match(/^\/api\/organization-applications\/([0-9a-f-]{36})\/notification-bot\/test$/i)
+  if (organizationApplicationBotTestMatch && request.method === 'POST') {
+    requirePlatformRequest(request)
+    const session = await requireSession(request)
+    requireCsrf(request, session)
+    rateLimitIdentifier('organization-notification-bot-test', session.user_id, 10, 60 * 60_000)
+    const application = await getOrganizationApplicationForCreator(organizationApplicationBotTestMatch[1], session.user_id)
+    if (!application) return json(response, 404, { error: 'organization_application_not_found' }, { 'Cache-Control': 'no-store' })
+    if (application.status !== 'approved' || !application.approvedOrganizationId) {
+      return json(response, 409, { error: 'organization_not_approved' }, { 'Cache-Control': 'no-store' })
+    }
+    const material = await loadOrganizationNotificationSecret(application.approvedOrganizationId)
+    if (!material?.enabled) return json(response, 409, { error: 'notification_bot_not_configured' }, { 'Cache-Control': 'no-store' })
+    if (!material.default_chat_id) return json(response, 409, { error: 'notification_chat_not_configured' }, { 'Cache-Control': 'no-store' })
+    await telegramBotRequest(decryptOrganizationNotificationToken(material.encrypted_token), 'sendMessage', {
+      chat_id: material.default_chat_id,
+      text: 'Совет онлайн: тестовое уведомление. Бот организации подключён.',
+      disable_notification: true,
+    })
+    return json(response, 200, { sent: true }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/platform/organization-applications' && request.method === 'GET') {
+    await requirePlatformSuperAdmin(request)
+    const rawStatus = url.searchParams.get('status')
+    const status = rawStatus
+      ? z.enum(['draft', 'submitted', 'changes_requested', 'approved', 'rejected']).parse(rawStatus)
+      : null
+    const applications = await listOrganizationApplicationsForReview({ status })
+    return json(response, 200, { applications }, { 'Cache-Control': 'no-store' })
+  }
+  const organizationApplicationReviewMatch = url.pathname.match(/^\/api\/platform\/organization-applications\/([0-9a-f-]{36})\/review$/i)
+  if (organizationApplicationReviewMatch && request.method === 'POST') {
+    const session = await requirePlatformSuperAdmin(request)
+    requireCsrf(request, session)
+    rateLimitIdentifier('organization-application-review', session.user_id, 120, 60 * 60_000)
+    const input = organizationApplicationReviewSchema.parse(await readJson(request, 16_384))
+    const application = await reviewOrganizationApplication({
+      applicationId: organizationApplicationReviewMatch[1],
+      reviewerUserId: session.user_id,
+      ...input,
+    })
+    return json(response, 200, { application }, { 'Cache-Control': 'no-store' })
+  }  if (url.pathname === '/api/organization/profile' && request.method === 'PATCH') {
+    const session = await requireOrganizationOwner(request)
+    requireCsrf(request, session)
+    const input = organizationProfileSchema.parse(await readJson(request, 32_768))
+    if (input.status === 'active') {
+      const configuration = await getOrganizationConfig(organizationContext.organizationId)
+      if (!configuration?.sponsor || !configuration.organization.aptos.organizationAddress) {
+        throw Object.assign(new Error('organization_publish_requirements_missing'), { status: 409 })
+      }
+    }
+    const organization = await updateOrganizationProfile({
+      organizationId: organizationContext.organizationId,
+      actorUserId: session.user_id,
+      ...input,
+    })
+    return json(response, 200, { organization }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/settings' && request.method === 'PATCH') {
+    const session = await requireOrganizationAdmin(request)
+    requireCsrf(request, session)
+    const input = organizationSettingsSchema.parse(await readJson(request, 64_000))
+    const settings = await updateOrganizationSettings({
+      organizationId: organizationContext.organizationId,
+      actorUserId: session.user_id,
+      ...input,
+    })
+    return json(response, 200, { settings }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/sponsor' && request.method === 'GET') {
+    const session = await requireOrganizationOwner(request)
+    const sponsor = await getOrganizationSponsor(organizationContext.organizationId)
+    const balanceOctas = sponsor ? await aptosAccountBalance(sponsor.publicAddress) : 0
+    return json(response, 200, {
+      sponsor,
+      balanceOctas: String(balanceOctas),
+      balanceApt: Number(balanceOctas) / 100_000_000,
+      canRotate: false,
+      requestedBy: session.user_id,
+    }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/sponsor' && request.method === 'POST') {
+    const session = await requireOrganizationOwner(request)
+    requireCsrf(request, session)
+    rateLimitIdentifier('organization-sponsor-create', session.user_id, 3, 24 * 60 * 60_000)
+    const input = organizationSponsorSchema.parse(await readJson(request, 8_192))
+    const existing = await getOrganizationSponsor(organizationContext.organizationId)
+    if (existing) throw Object.assign(new Error('organization_sponsor_already_configured'), { status: 409 })
+    const relayer = createOrganizationRelayer()
+    const sponsor = await configureOrganizationSponsor({
+      organizationId: organizationContext.organizationId,
+      actorUserId: session.user_id,
+      publicAddress: relayer.aptosAddress,
+      encryptedPrivateKey: encryptOrganizationRelayerPrivateKey(relayer.privateKey),
+      ...input,
+    })
+    return json(response, 201, { sponsor, balanceOctas: '0', balanceApt: 0 }, { 'Cache-Control': 'no-store' })
+  }
+  if (url.pathname === '/api/organization/domains' && request.method === 'POST') {
+    const session = await requireOrganizationOwner(request)
+    requireCsrf(request, session)
+    const input = organizationDomainSchema.parse(await readJson(request, 8_192))
+    const domain = await registerOrganizationDomain({
+      organizationId: organizationContext.organizationId,
+      actorUserId: session.user_id,
+      ...input,
+    })
+    return json(response, 201, { domain }, { 'Cache-Control': 'no-store' })
+  }
+  if (organizationContext.organizationId !== DEFAULT_ORGANIZATION_ID && url.pathname.startsWith('/api/v1/')) {
+    const organizationScopedV1Write = url.pathname === '/api/v1/vote-intents'
+      || url.pathname === '/api/v1/admin-election-vote-intents'
+      || /^\/api\/v1\/vote-intents\/[0-9a-f-]+\/(?:managed-submission|submission)$/.test(url.pathname)
+      || /^\/api\/v1\/operations\/[0-9a-f-]+$/.test(url.pathname)
+    if (!organizationScopedV1Write) return json(response, 409, { error: 'organization_v2_endpoint_not_ready' })
   }
   if (url.pathname === '/api/v1/participants' && request.method === 'GET') {
     const query = participantQuerySchema.parse({
@@ -557,9 +1245,16 @@ async function handlePublicApi(request, response, url) {
     }
     if (electionId && !/^\d+$/.test(electionId)) throw Object.assign(new Error('invalid_election_id'), { status: 400 })
     const viewer = await sessionFromRequest(request)
-    return json(response, 200, {
-      proposals: await listDocumentProposals({ documentId, electionId, viewerUserId: viewer?.user_id ?? null }),
-    }, { 'Cache-Control': 'no-store' })
+    const viewerUserId = viewer?.user_id ?? null
+    if (documentId) await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: viewerUserId, type: 'document', id: documentId, scope: 'content' })
+    if (electionId) await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: viewerUserId, type: 'election', id: electionId, scope: 'subject' })
+    const proposals = await listDocumentProposals({ documentId, electionId, viewerUserId })
+    const documentIds = [...new Set(proposals.map((proposal) => proposal.documentId))]
+    const electionIds = [...new Set(proposals.map((proposal) => proposal.electionId).filter(Boolean))]
+    const visibleDocumentIds = new Set(await filterAccessibleResourceIds({ organizationId: organizationContext.organizationId, userId: viewerUserId, type: 'document', ids: documentIds, scope: 'content' }))
+    const visibleElectionIds = new Set(await filterAccessibleResourceIds({ organizationId: organizationContext.organizationId, userId: viewerUserId, type: 'election', ids: electionIds, scope: 'subject' }))
+    const visibleProposals = proposals.filter((proposal) => visibleDocumentIds.has(proposal.documentId) && (!proposal.electionId || visibleElectionIds.has(proposal.electionId)))
+    return json(response, 200, { proposals: visibleProposals }, { 'Cache-Control': 'no-store' })
   }
   const proposalHashMatch = url.pathname.match(/^\/api\/v1\/document-proposals\/sha256\/(0x[0-9a-f]{64})$/i)
   if (proposalHashMatch && request.method === 'GET') {
@@ -579,6 +1274,10 @@ async function handlePublicApi(request, response, url) {
     const session = await requireSession(request)
     requireCsrf(request, session)
     rateLimitIdentifier('proposal-support', session.user_id, 60, 24 * 60 * 60_000)
+    const currentProposal = await getDocumentProposal(proposalSupportMatch[1], { viewerUserId: session.user_id })
+    if (!currentProposal) return json(response, 404, { error: 'proposal_not_found' })
+    await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: session.user_id, type: 'document', id: currentProposal.documentId, scope: 'content' })
+    if (currentProposal.electionId) await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: session.user_id, type: 'election', id: currentProposal.electionId, scope: 'participate' })
     const proposal = await supportDocumentProposal({
       id: proposalSupportMatch[1],
       userId: session.user_id,
@@ -600,10 +1299,12 @@ async function handlePublicApi(request, response, url) {
   const publicProposalMatch = url.pathname.match(/^\/api\/v1\/document-proposals\/([0-9a-f-]{36})$/)
   if (publicProposalMatch && request.method === 'GET') {
     const viewer = await sessionFromRequest(request)
-    const proposal = await getDocumentProposal(publicProposalMatch[1], { viewerUserId: viewer?.user_id ?? null })
-    return proposal
-      ? json(response, 200, { proposal }, { 'Cache-Control': 'no-store' })
-      : json(response, 404, { error: 'proposal_not_found' })
+    const viewerUserId = viewer?.user_id ?? null
+    const proposal = await getDocumentProposal(publicProposalMatch[1], { viewerUserId })
+    if (!proposal) return json(response, 404, { error: 'proposal_not_found' })
+    await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: viewerUserId, type: 'document', id: proposal.documentId, scope: 'content' })
+    if (proposal.electionId) await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: viewerUserId, type: 'election', id: proposal.electionId, scope: 'subject' })
+    return json(response, 200, { proposal }, { 'Cache-Control': 'no-store' })
   }
   if (url.pathname === '/api/v1/chain-transactions' && request.method === 'GET') {
     return json(response, 200, { transactionHashes: await listRecordedChainTransactions() }, { 'Cache-Control': 'no-store' })
@@ -621,6 +1322,7 @@ async function handlePublicApi(request, response, url) {
     rateLimit(request, 'document-proposal-create', 30, 60 * 60_000)
     rateLimitIdentifier('document-proposal-create-user', session.user_id, 10, 24 * 60 * 60_000)
     const input = documentProposalSchema.parse(await readJson(request, 96_000))
+    await requireResourceAccess({ organizationId: organizationContext.organizationId, userId: session.user_id, type: 'document', id: input.documentId, scope: 'content' })
     const id = randomUUID()
     const createdAt = new Date().toISOString()
     const eligibleAccounts = await countActiveParticipants()
@@ -788,11 +1490,15 @@ async function handlePublicApi(request, response, url) {
     const session = await sessionFromRequest(request)
     if (session) requireCsrf(request, session)
     const answered = new Set(await listLogicGameAnsweredIds(session?.user_id ?? null))
-    const remaining = logicChallenges.filter((challenge) => !answered.has(challenge.id))
+    const selection = filterLogicChallenges(logicChallenges, input)
+    const selectionAnswered = selection.reduce((count, challenge) => count + Number(answered.has(challenge.id)), 0)
+    const remaining = selection.filter((challenge) => !answered.has(challenge.id))
     if (remaining.length === 0) {
       return json(response, 200, {
         complete: true,
         totalChallenges: logicChallenges.length,
+        selectionTotal: selection.length,
+        selectionAnswered,
         profile: await getLogicGameProfile(session?.user_id ?? null),
       })
     }
@@ -810,6 +1516,8 @@ async function handlePublicApi(request, response, url) {
       roundToken,
       challenge: presentLogicChallenge(challenge, input.lang),
       totalChallenges: logicChallenges.length,
+      selectionTotal: selection.length,
+      selectionAnswered,
       profile: await getLogicGameProfile(session?.user_id ?? null),
     })
   }
@@ -1037,7 +1745,7 @@ async function handlePublicApi(request, response, url) {
     const cookies = parseCookies(request)
     const csrfToken = cookies['__Host-sovet_csrf'] ?? cookies.sovet_csrf
     const validCsrf = csrfToken && hashSecret(csrfToken) === session?.csrf_hash ? csrfToken : null
-    return json(response, 200, { user: session ? await exposedUser(session, validCsrf) : null })
+    return json(response, 200, { user: session ? await exposedUser(session, validCsrf, organizationContext.organizationId) : null })
   }
   if (url.pathname === '/api/me' && request.method === 'PATCH') {
     const session = await requireSession(request)
@@ -1138,16 +1846,20 @@ async function handlePublicApi(request, response, url) {
     requireCsrf(request, session)
     const settings = await getSettings()
     if (sponsorshipLocked) return json(response, 503, { error: 'sponsorship_emergency_locked' })
-    if (!settings.sponsorshipEnabled) return json(response, 503, { error: 'sponsorship_disabled' })
-    const chain = await aptosStatus()
-    if (!chain.sourceParityVerified) return json(response, 503, { error: 'contract_source_mismatch' })
-    if (!chain.ok || Number(chain.relayerBalanceOctas ?? 0) < 1_000_000) return json(response, 503, { error: 'relayer_unfunded' })
-    if (await countRecentSponsoredVotes(session.user_id) >= settings.maxSponsoredVotesPerHour) return json(response, 429, { error: 'sponsorship_rate_limited' })
-    if (await countRecentSponsoredVotes() >= settings.maxSponsoredVotesGlobalPerHour * 4) return json(response, 429, { error: 'sponsorship_global_rate_limited' })
     const input = voteSchema.parse(await readJson(request))
+    const organizationId = organizationIdForRequest(request)
+    await requireResourceAccess({ organizationId, userId: session.user_id, type: 'election', id: input.electionId, scope: 'participate' })
+    const sponsorship = await sponsoredWriteContext({ request, session, settings, idempotencyKey: input.idempotencyKey, intentKind: 'weighted_vote' })
     const senderAddress = votingAddressFor(session)
-    const built = await buildSponsoredVote({ senderAddress, ...input })
-    const intent = await createOrGetVoteIntent({ intentKind: 'weighted_vote', userId: session.user_id, senderAddress, ...input, ...built })
+    const built = await buildSponsoredVote({ senderAddress, feePayerAddress: sponsorship.feePayerAddress, ...input })
+    const intent = await createOrGetVoteIntent({
+      organizationId: sponsorship.organizationId,
+      intentKind: 'weighted_vote',
+      userId: session.user_id,
+      senderAddress,
+      ...input,
+      ...built,
+    })
     return json(response, 201, { intentId: intent.id, rawTransactionB64: intent.raw_transaction_b64, expiresAt: intent.expires_at, preview: built.preview })
   }
   if (url.pathname === '/api/v1/admin-election-vote-intents' && request.method === 'POST') {
@@ -1155,17 +1867,15 @@ async function handlePublicApi(request, response, url) {
     requireCsrf(request, session)
     const settings = await getSettings()
     if (sponsorshipLocked) return json(response, 503, { error: 'sponsorship_emergency_locked' })
-    if (!settings.sponsorshipEnabled) return json(response, 503, { error: 'sponsorship_disabled' })
-    const chain = await aptosStatus()
-    if (!chain.sourceParityVerified) return json(response, 503, { error: 'contract_source_mismatch' })
-    if (!chain.ok || Number(chain.relayerBalanceOctas ?? 0) < 1_000_000) return json(response, 503, { error: 'relayer_unfunded' })
-    if (await countRecentSponsoredVotes(session.user_id) >= settings.maxSponsoredVotesPerHour) return json(response, 429, { error: 'sponsorship_rate_limited' })
-    if (await countRecentSponsoredVotes() >= settings.maxSponsoredVotesGlobalPerHour * 4) return json(response, 429, { error: 'sponsorship_global_rate_limited' })
     const input = equalAdminVoteSchema.parse(await readJson(request))
+    const organizationId = organizationIdForRequest(request)
+    await requireResourceAccess({ organizationId, userId: session.user_id, type: 'election', id: input.adminElectionId, scope: 'participate' })
+    const sponsorship = await sponsoredWriteContext({ request, session, settings, idempotencyKey: input.idempotencyKey, intentKind: 'admin_equal_vote' })
     const senderAddress = votingAddressFor(session)
-    const built = await buildSponsoredEqualAdminVote({ senderAddress, ...input })
+    const built = await buildSponsoredEqualAdminVote({ senderAddress, feePayerAddress: sponsorship.feePayerAddress, ...input })
     const allocations = input.choice === 1 ? [10_000, 0, 0] : input.choice === 2 ? [0, 10_000, 0] : [0, 0, 10_000]
     const intent = await createOrGetVoteIntent({
+      organizationId: sponsorship.organizationId,
       intentKind: 'admin_equal_vote',
       userId: session.user_id, senderAddress, electionId: input.adminElectionId,
       yesBps: allocations[0], noBps: allocations[1], abstainBps: allocations[2], idempotencyKey: input.idempotencyKey, ...built,
@@ -1178,23 +1888,25 @@ async function handlePublicApi(request, response, url) {
     requireCsrf(request, session)
     const settings = await getSettings()
     if (sponsorshipLocked) return json(response, 503, { error: 'sponsorship_emergency_locked' })
-    if (!settings.sponsorshipEnabled) return json(response, 503, { error: 'sponsorship_disabled' })
+    const organizationId = organizationIdForRequest(request)
+    if (organizationId === DEFAULT_ORGANIZATION_ID && !settings.sponsorshipEnabled) return json(response, 503, { error: 'sponsorship_disabled' })
     const senderAddress = votingAddressFor(session)
-    const intent = await getVoteIntent(managedSubmissionMatch[1])
+    const intent = await getVoteIntent(managedSubmissionMatch[1], organizationId)
     if (!intent || intent.user_id !== session.user_id) return json(response, 404, { error: 'intent_not_found' })
     if (intent.status !== 'prepared') return json(response, 409, { error: 'intent_already_used', txHash: intent.tx_hash })
     if (new Date(intent.expires_at).getTime() <= Date.now()) return json(response, 409, { error: 'intent_expired' })
+    await requireResourceAccess({ organizationId, userId: session.user_id, type: 'election', id: intent.election_id, scope: 'participate' })
     const managedWallet = await getManagedWallet(session.user_id)
     if (!managedWallet || managedWallet.aptos_address.toLowerCase() !== senderAddress
       || intent.sender_address.toLowerCase() !== senderAddress) return json(response, 403, { error: 'managed_wallet_required' })
     const [chain, parity] = await Promise.all([aptosStatus(), verifyPublishedModules({ force: true })])
     if (!chain.ok || !parity.verified) return json(response, 503, { error: 'contract_source_mismatch' })
-    if (Number(chain.relayerBalanceOctas ?? 0) < 1_000_000) return json(response, 503, { error: 'relayer_unfunded' })
+    const sponsorship = await sponsoredWriteContext({ request, session, settings, idempotencyKey: intent.idempotency_key, intentKind: intent.intent_kind })
     const transaction = deserializeTransaction(intent.raw_transaction_b64)
     try {
       validateSponsoredVoteTransaction({
         transaction, intent, senderAddress,
-        feePayerAddress: aptosRuntime.relayerAddress,
+        feePayerAddress: sponsorship.feePayerAddress,
         moduleAddress: aptosRuntime.moduleAddress,
       })
     } catch (error) {
@@ -1203,20 +1915,30 @@ async function handlePublicApi(request, response, url) {
     const claimed = await claimVoteIntent({
       id: intent.id,
       userId: session.user_id,
+      organizationId,
       globalHourlyLimit: settings.maxSponsoredVotesGlobalPerHour,
     })
     if (!claimed) {
-      const current = await getVoteIntent(intent.id)
+      const current = await getVoteIntent(intent.id, organizationId)
       return json(response, 409, { error: 'intent_already_used', txHash: current?.tx_hash ?? null })
     }
     try {
-      const pending = await submitManagedSponsoredVote({ transaction, privateKey: decryptManagedPrivateKey(managedWallet.encrypted_private_key) })
+      const pending = await submitManagedSponsoredVote({
+        transaction,
+        privateKey: decryptManagedPrivateKey(managedWallet.encrypted_private_key),
+        feePayerPrivateKey: sponsorship.feePayerPrivateKey,
+      })
       await markVoteSubmitted(claimed.id, pending.hash)
+      if (sponsorship.usageIdempotencyKey) await markOrganizationSponsorUsage({ organizationId, idempotencyKey: sponsorship.usageIdempotencyKey, status: 'submitted', txHash: pending.hash })
       await logEvent('vote', 'ok', 'Managed sponsored vote submitted', { userId: session.user_id, electionId: claimed.election_id, txHash: pending.hash })
-      waitForVote(pending.hash).then((result) => markVoteFinal(claimed.id, result.success, result.success ? null : result.vm_status)).catch(() => {})
+      waitForVote(pending.hash).then(async (result) => {
+        await markVoteFinal(claimed.id, result.success, result.success ? null : result.vm_status)
+        if (sponsorship.usageIdempotencyKey) await markOrganizationSponsorUsage({ organizationId, idempotencyKey: sponsorship.usageIdempotencyKey, status: result.success ? 'confirmed' : 'failed', txHash: pending.hash, errorCode: result.success ? null : result.vm_status })
+      }).catch(() => {})
       return json(response, 202, { operationId: claimed.id, txHash: pending.hash, status: 'submitted', explorerUrl: `https://explorer.aptoslabs.com/txn/${pending.hash}?network=testnet` })
     } catch (error) {
       await markVoteSubmissionFailed(claimed.id)
+      if (sponsorship.usageIdempotencyKey) await markOrganizationSponsorUsage({ organizationId, idempotencyKey: sponsorship.usageIdempotencyKey, status: 'failed', errorCode: error?.message ?? 'submission_failed' })
       throw error
     }
   }
@@ -1226,21 +1948,23 @@ async function handlePublicApi(request, response, url) {
     requireCsrf(request, session)
     const settings = await getSettings()
     if (sponsorshipLocked) return json(response, 503, { error: 'sponsorship_emergency_locked' })
-    if (!settings.sponsorshipEnabled) return json(response, 503, { error: 'sponsorship_disabled' })
+    const organizationId = organizationIdForRequest(request)
+    if (organizationId === DEFAULT_ORGANIZATION_ID && !settings.sponsorshipEnabled) return json(response, 503, { error: 'sponsorship_disabled' })
     const senderAddress = votingAddressFor(session)
-    const intent = await getVoteIntent(submissionMatch[1])
+    const intent = await getVoteIntent(submissionMatch[1], organizationId)
     if (!intent || intent.user_id !== session.user_id) return json(response, 404, { error: 'intent_not_found' })
     if (intent.status !== 'prepared') return json(response, 409, { error: 'intent_already_used', txHash: intent.tx_hash })
     if (new Date(intent.expires_at).getTime() <= Date.now()) return json(response, 409, { error: 'intent_expired' })
+    await requireResourceAccess({ organizationId, userId: session.user_id, type: 'election', id: intent.election_id, scope: 'participate' })
     const { senderAuthenticatorB64 } = submissionSchema.parse(await readJson(request))
     const [chain, parity] = await Promise.all([aptosStatus(), verifyPublishedModules({ force: true })])
     if (!chain.ok || !parity.verified) return json(response, 503, { error: 'contract_source_mismatch' })
-    if (Number(chain.relayerBalanceOctas ?? 0) < 1_000_000) return json(response, 503, { error: 'relayer_unfunded' })
+    const sponsorship = await sponsoredWriteContext({ request, session, settings, idempotencyKey: intent.idempotency_key, intentKind: intent.intent_kind })
     const transaction = deserializeTransaction(intent.raw_transaction_b64)
     try {
       validateSponsoredVoteTransaction({
         transaction, intent, senderAddress,
-        feePayerAddress: aptosRuntime.relayerAddress,
+        feePayerAddress: sponsorship.feePayerAddress,
         moduleAddress: aptosRuntime.moduleAddress,
       })
     } catch (error) {
@@ -1250,27 +1974,34 @@ async function handlePublicApi(request, response, url) {
     const claimed = await claimVoteIntent({
       id: intent.id,
       userId: session.user_id,
+      organizationId,
       globalHourlyLimit: settings.maxSponsoredVotesGlobalPerHour,
     })
     if (!claimed) {
-      const current = await getVoteIntent(intent.id)
+      const current = await getVoteIntent(intent.id, organizationId)
       return json(response, 409, { error: 'intent_already_used', txHash: current?.tx_hash ?? null })
     }
     try {
-      const pending = await submitSponsoredVote({ transaction, senderAuthenticator })
+      const pending = await submitSponsoredVote({ transaction, senderAuthenticator, feePayerPrivateKey: sponsorship.feePayerPrivateKey })
       await markVoteSubmitted(claimed.id, pending.hash)
+      if (sponsorship.usageIdempotencyKey) await markOrganizationSponsorUsage({ organizationId, idempotencyKey: sponsorship.usageIdempotencyKey, status: 'submitted', txHash: pending.hash })
       await logEvent('vote', 'ok', 'Sponsored vote submitted to Aptos Testnet', { userId: session.user_id, electionId: claimed.election_id, txHash: pending.hash })
-      waitForVote(pending.hash).then((result) => markVoteFinal(claimed.id, result.success, result.success ? null : result.vm_status)).catch(() => {})
+      waitForVote(pending.hash).then(async (result) => {
+        await markVoteFinal(claimed.id, result.success, result.success ? null : result.vm_status)
+        if (sponsorship.usageIdempotencyKey) await markOrganizationSponsorUsage({ organizationId, idempotencyKey: sponsorship.usageIdempotencyKey, status: result.success ? 'confirmed' : 'failed', txHash: pending.hash, errorCode: result.success ? null : result.vm_status })
+      }).catch(() => {})
       return json(response, 202, { operationId: claimed.id, txHash: pending.hash, status: 'submitted', explorerUrl: `https://explorer.aptoslabs.com/txn/${pending.hash}?network=testnet` })
     } catch (error) {
       await markVoteSubmissionFailed(claimed.id)
+      if (sponsorship.usageIdempotencyKey) await markOrganizationSponsorUsage({ organizationId, idempotencyKey: sponsorship.usageIdempotencyKey, status: 'failed', errorCode: error?.message ?? 'submission_failed' })
       throw error
     }
   }
   const operationMatch = url.pathname.match(/^\/api\/v1\/operations\/([0-9a-f-]+)$/)
   if (operationMatch && request.method === 'GET') {
     const session = await requireSession(request)
-    const intent = await getVoteIntent(operationMatch[1])
+    const organizationId = organizationIdForRequest(request)
+    const intent = await getVoteIntent(operationMatch[1], organizationId)
     if (!intent || intent.user_id !== session.user_id) return json(response, 404, { error: 'operation_not_found' })
     return json(response, 200, { operationId: intent.id, status: intent.status, txHash: intent.tx_hash, errorCode: intent.error_code })
   }
@@ -1330,6 +2061,7 @@ async function handleOps(request, response, url) {
       passwordHash: await hashPassword(input.password),
       creatorAddress,
     })
+    await syncDefaultOrganizationMembership({ userId: account.userId, role: 'owner' })
     return json(response, 200, { account })
   }
   if (url.pathname === '/api/restart' && request.method === 'POST') {
@@ -1348,31 +2080,42 @@ async function handleOps(request, response, url) {
 
 if (!existsSync(join(distRoot, 'index.html'))) throw new Error(`Production build is missing: ${distRoot}. Run npm.cmd run build first.`)
 await initializeStorage()
+await initializeTenantStorage()
+await initializeOrganizationApplications()
+await initializeOrganizationAccess()
 
 const publicServer = createServer(async (request, response) => {
   try {
-    const url = new URL(request.url ?? '/', `http://${host}:${port}`)
-    const publicOrigin = requestOrigin(request)
-    if (publicOrigin.host === 'www.novyway.com') {
+    const requestedUrl = new URL(request.url ?? '/', `http://${host}:${port}`)
+    if (requestedUrl.pathname === '/__health' && (request.method === 'GET' || request.method === 'HEAD')) return sendHealth(response, request.method)
+    const organizationContext = await resolveOrganizationRequest({
+      request,
+      url: requestedUrl,
+      findBySlug: findOrganizationBySlug,
+      findByDomain: findOrganizationByDomain,
+      defaultSlug: DEFAULT_ORGANIZATION_SLUG,
+    })
+    request.organizationContext = organizationContext
+    const url = organizationContext.url
+    if (organizationContext.hostname === 'www.novyway.com') {
       response.writeHead(308, {
-        Location: `https://novyway.com${url.pathname}${url.search}`,
+        Location: `https://novyway.com${requestedUrl.pathname}${requestedUrl.search}`,
         'Cache-Control': 'no-store',
         ...securityHeaders,
       })
       response.end()
       return
     }
-    if (url.pathname === '/__health' && (request.method === 'GET' || request.method === 'HEAD')) return sendHealth(response, request.method)
-    if (url.pathname.startsWith('/api/')) return await handlePublicApi(request, response, url)
+    if (requestedUrl.pathname.startsWith('/api/')) return await handlePublicApi(request, response, url, organizationContext)
     if (request.method !== 'GET' && request.method !== 'HEAD') return json(response, 405, { error: 'method_not_allowed' }, { Allow: 'GET, HEAD' })
-    const musicMatch = url.pathname.match(/^\/media\/music\/([^/]+)$/)
+    const musicMatch = requestedUrl.pathname.match(/^\/media\/music\/([^/]+)$/)
     if (musicMatch) {
       if (!musicAllowed(request)) return json(response, 403, { error: 'music_public_license_required' })
       const candidate = resolvePath(musicRoot, decodeURIComponent(musicMatch[1]))
       if (!candidate || !existsSync(candidate) || !statSync(candidate).isFile()) return json(response, 404, { error: 'music_not_found' })
       return sendRangedFile(request, response, candidate)
     }
-    const candidate = resolvePath(distRoot, url.pathname)
+    const candidate = resolvePath(distRoot, requestedUrl.pathname)
     if (candidate && existsSync(candidate) && statSync(candidate).isFile()) return sendFile(response, candidate, request.method)
     return sendFile(response, join(distRoot, 'index.html'), request.method)
   } catch (error) {
@@ -1405,8 +2148,13 @@ publicServer.listen(port, host, async () => {
 opsServer.listen(opsPort, '127.0.0.1')
 
 async function sampleUptime() {
-  const chain = await aptosStatus()
-  await recordUptime({ publicOk: publicServer.listening, aptosOk: chain.ok, latencyMs: chain.latencyMs })
+  try {
+    const chain = await aptosStatus()
+    await recordUptime({ publicOk: publicServer.listening, aptosOk: chain.ok, latencyMs: chain.latencyMs })
+  } catch (error) {
+    // Monitoring must never take the public service down when PostgreSQL or Aptos is briefly unavailable.
+    console.error('[uptime]', error instanceof Error ? error.message : String(error))
+  }
 }
 setTimeout(sampleUptime, 1500)
 const sampleTimer = setInterval(sampleUptime, 60_000)
@@ -1420,6 +2168,13 @@ setTimeout(() => ensureDailyBackup().catch((error) => console.error('[backup]', 
 const backupTimer = setInterval(() => ensureDailyBackup().catch((error) => console.error('[backup]', error.message)), 6 * 60 * 60_000)
 backupTimer.unref()
 
+setTimeout(() => purgeExpiredRejectedApplications().catch((error) => console.error('[application-purge]', error.message)), 12_000)
+const applicationPurgeTimer = setInterval(
+  () => purgeExpiredRejectedApplications().catch((error) => console.error('[application-purge]', error.message)),
+  6 * 60 * 60_000,
+)
+applicationPurgeTimer.unref()
+
 function cleanupPidFile() {
   try {
     if (existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim() === String(process.pid)) rmSync(pidFile, { force: true })
@@ -1429,6 +2184,7 @@ function cleanupPidFile() {
 function shutdown(code = 0) {
   clearInterval(sampleTimer)
   clearInterval(backupTimer)
+  clearInterval(applicationPurgeTimer)
   let pending = 2
   const done = () => { if (--pending === 0) { cleanupPidFile(); process.exit(code) } }
   publicServer.close(done)

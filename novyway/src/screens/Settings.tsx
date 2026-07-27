@@ -8,7 +8,7 @@ import { useMusic } from '../sound/useMusic'
 export default function Settings() {
   const { t } = useT()
   const { s, update } = useSettings()
-  const { status: musicStatus, starting: musicStarting, waiting: musicWaiting, setEnabled: setMusicEnabled } = useMusic()
+  const { status: musicStatus, starting: musicStarting, setEnabled: setMusicEnabled } = useMusic()
 
   return (
     <>
@@ -54,28 +54,29 @@ export default function Settings() {
             <Switch
               checked={s.musicOn}
               onChange={(value) => void setMusicEnabled(value)}
-              label={musicWaiting
-                ? (s.lang === 'ru' ? 'Музыка включится после короткой паузы' : 'Music starts after a short pause')
-                : musicStatus === 'playing'
-                  ? (s.lang === 'ru' ? 'Музыка играет' : 'Music is playing')
-                  : s.musicOn
-                    ? (s.lang === 'ru' ? 'Музыка ждёт активную вкладку' : 'Music is waiting for this tab')
-                    : musicStarting
-                      ? (s.lang === 'ru' ? 'Запускаем музыку…' : 'Starting music…')
+              label={musicStatus === 'playing'
+                ? (s.lang === 'ru' ? 'Музыка играет' : 'Music is playing')
+                : musicStarting
+                  ? (s.lang === 'ru' ? 'Запускаем музыку…' : 'Starting music…')
+                  : musicStatus === 'blocked' && s.musicOn
+                    ? (s.lang === 'ru' ? 'Музыка включится после первого действия' : 'Music will start after your first action')
+                    : s.musicOn
+                      ? (s.lang === 'ru' ? 'Музыка включена' : 'Music is enabled')
                       : (s.lang === 'ru' ? 'Включить музыку' : 'Enable music')}
             />
             <label className="field" style={{ maxWidth: 260 }}>
               <span>{s.lang === 'ru' ? 'Громкость музыки' : 'Music volume'} · {Math.round(s.musicVolume * 100)}%</span>
-              <input type="range" min={0} max={100} value={s.musicVolume * 100} style={{ ['--fill' as string]: `${s.musicVolume * 100}%` }} onChange={(event) => update({ musicVolume: Number(event.target.value) / 100 })} />
+              <input type="range" min={0} max={100} value={s.musicVolume * 100} style={{ ['--fill' as string]: s.musicVolume * 100 + '%' }} onChange={(event) => update({ musicVolume: Number(event.target.value) / 100 })} />
             </label>
             {music.currentTrack && <div className="mono muted">{music.currentTrack.title}</div>}
             <div className="music-background-setting">
               <Switch checked={s.musicInBackground} onChange={(value) => update({ musicInBackground: value })} label={s.lang === 'ru' ? 'Продолжать в других вкладках' : 'Keep playing outside this tab'} />
-              <p className="muted">{s.lang === 'ru' ? 'Если выключено, скрытая вкладка ставит музыку на паузу. После открытия сайта музыка всегда ждёт 30 секунд.' : 'When disabled, hiding this tab pauses the music. Music always waits 30 seconds after the site opens.'}</p>
+              <p className="muted">{s.lang === 'ru' ? 'Если выключено, скрытая вкладка сразу ставит музыку на паузу. Возвращение на сайт продолжает текущий трек.' : 'When disabled, a hidden tab pauses immediately. Returning to the site resumes the current track.'}</p>
             </div>
+            {musicStatus === 'blocked' && s.musicOn && <div className="callout cyan">{s.lang === 'ru' ? 'Браузер запрещает звук до первого клика или нажатия клавиши. Настройка сохранена — музыка запустится после действия на странице.' : 'The browser blocks sound until the first click or key press. Your preference is saved and playback will begin after that action.'}</div>}
             {musicStatus === 'unavailable' && <div className="callout yellow">{s.lang === 'ru' ? 'Музыка недоступна в этом окружении.' : 'Music is unavailable in this environment.'}</div>}
             {musicStatus === 'error' && <div className="callout red">{music.error}</div>}
-            {music.localPreview && <p className="muted">{s.lang === 'ru' ? 'Локальный предпросмотр: семь треков идут по порядку, загружается только текущий, переход длится 10 секунд.' : 'Local preview: seven tracks play in order, only the current track is streamed, with a ten-second crossfade.'}</p>}
+            {music.localPreview && <p className="muted">{s.lang === 'ru' ? 'Семь треков идут по порядку. Композиции не накладываются: последние десять секунд затихают, следующая начинается после окончания.' : 'Seven tracks play in order. Songs never overlap: the current track fades during its final ten seconds and the next begins only after it ends.'}</p>}
           </div>
         </Panel>
 

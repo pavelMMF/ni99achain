@@ -8,6 +8,7 @@ import { OnChainDocumentRegistry } from '../ui/components/OnChainDocumentRegistr
 import { currentRuntimeMode } from '../adapters/types'
 import { useDocumentProposals } from '../adapters/documentProposals'
 import { useLiveVoting } from '../adapters/aptos/useLiveAptos'
+import { useAccessibleIds } from '../tenancy/access'
 // three.js — самый тяжёлый модуль бандла; грузим сцену только когда она видима
 const Graph = lazy(() => import('./Graph'))
 
@@ -20,10 +21,14 @@ export default function Documents() {
   const { s } = useSettings()
   const nav = useNavigate()
   const docs = useDocuments()
+  const documentIds = useMemo(() => docs.map((document) => document.id), [docs])
+  const documentAccess = useAccessibleIds('document', documentIds, 'discover')
   const [params, setParams] = useSearchParams()
   const testnet = currentRuntimeMode() === 'aptos-testnet'
   const live = useLiveVoting()
   const proposalRegistry = useDocumentProposals({ enabled: testnet })
+  const electionIds = useMemo(() => (live.data?.elections ?? []).map((election) => election.id), [live.data?.elections])
+  const electionAccess = useAccessibleIds('election', electionIds)
   const requestedView = params.get('view') as ViewMode | null
   const view: ViewMode = ['list', 'graph', 'combined'].includes(requestedView ?? '') ? requestedView! : s.documentsView
   const [query, setQuery] = useState('')
@@ -32,21 +37,22 @@ export default function Documents() {
   const [sort, setSort] = useState<SortMode>('newest')
   const [activeOnly, setActiveOnly] = useState(false)
   const [spaceId, setSpaceId] = useState('all')
-  const proposalDataLoading = testnet && (live.loading || proposalRegistry.loading)
-  const proposalDataError = testnet ? (live.error ?? proposalRegistry.error) : null
+  const proposalDataLoading = documentAccess.loading || (testnet && (live.loading || proposalRegistry.loading || electionAccess.loading))
+  const proposalDataError = documentAccess.error ?? (testnet ? (live.error ?? proposalRegistry.error ?? electionAccess.error) : null)
   const activeByDocument = useMemo(() => {
     if (!testnet) return new Map<string, number>()
     const activeElectionIds = new Set((live.data?.elections ?? [])
-      .filter((election) => election.status === 'active')
+      .filter((election) => election.status === 'active' && electionAccess.allowed?.has(election.id))
       .map((election) => election.id))
     return proposalRegistry.proposals.reduce((counts, proposal) => {
       if (proposal.electionId && activeElectionIds.has(proposal.electionId)) counts.set(proposal.documentId, (counts.get(proposal.documentId) ?? 0) + 1)
       return counts
     }, new Map<string, number>())
-  }, [live.data?.elections, proposalRegistry.proposals, testnet])
+  }, [electionAccess.allowed, live.data?.elections, proposalRegistry.proposals, testnet])
 
 
   const visibleDocs = useMemo(() => docs
+    .filter((document) => documentAccess.allowed?.has(document.id))
     .filter((document) => {
       const text = `${l(document.title)} ${l(groupNames[document.group])}`.toLowerCase()
       const primaryTopicMatch = primaryTopicId === 'all' || document.primaryTopicId === primaryTopicId
@@ -61,7 +67,7 @@ export default function Documents() {
       if (sort === 'name') return l(a.title).localeCompare(l(b.title))
       const delta = new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
       return sort === 'newest' ? -delta : delta
-    }), [activeByDocument, activeOnly, docs, l, primaryTopicId, query, secondaryTopicId, sort, state.elections, testnet])
+    }), [activeByDocument, activeOnly, docs, documentAccess.allowed, l, primaryTopicId, query, secondaryTopicId, sort, state.elections, testnet])
   const visibleDocumentIds = useMemo(() => visibleDocs.map((document) => document.id), [visibleDocs])
 
   function changeView(next: ViewMode) {
@@ -74,7 +80,7 @@ export default function Documents() {
     <section className={`documents-workspace documents-workspace--${view}`} data-document-view={view}>
       <PageHead
         title={t('doc.workspace')}
-        sub={t('doc.workspaceSub')}
+
         right={(
           <div className="seg workspace-view-switch" aria-label={t('doc.workspace')}>
             <button className={view === 'list' ? 'on' : ''} data-document-view-option="list" aria-pressed={view === 'list'} onClick={() => changeView('list')}>{t('gr.listView')}</button>
@@ -147,7 +153,7 @@ export default function Documents() {
         )}
       </div>
 
-      {view === 'list' && <OnChainDocumentRegistry />}
+      {view === 'list' && <OnChainDocumentRegistry visibleDocumentIds={visibleDocumentIds} />}
     </section>
   )
 }

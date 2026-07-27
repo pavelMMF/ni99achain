@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { requestTarget } from './organization-context.mjs'
 
 export function json(response, status, value, extraHeaders = {}) {
   const body = JSON.stringify(value)
@@ -100,6 +101,9 @@ export function publicUser(row, csrfToken, permissions = {}) {
     role: permissions.isSuperAdmin ? 'super_admin' : permissions.isAdmin ? 'admin' : 'voter',
     isAdmin: Boolean(permissions.isAdmin),
     isSuperAdmin: Boolean(permissions.isSuperAdmin),
+    governanceSignerActive: Boolean(permissions.governanceSignerActive),
+    creatorSignerActive: Boolean(permissions.creatorSignerActive),
+    organizationRole: permissions.organizationRole ?? null,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
     csrfToken,
@@ -107,13 +111,8 @@ export function publicUser(row, csrfToken, permissions = {}) {
 }
 
 export function requestOrigin(request) {
-  const forwarded = request.headers['x-forwarded-host']
-  const host = (Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? request.headers.host ?? ''
-  const cleanHost = host.split(',')[0].trim().toLowerCase()
-  const allowed = new Set(['novyway.com', 'www.novyway.com', '127.0.0.1:4176', 'localhost:4176'])
-  if (!allowed.has(cleanHost)) throw Object.assign(new Error('invalid_host'), { status: 400 })
-  const secure = cleanHost === 'novyway.com' || cleanHost === 'www.novyway.com'
-  return { host: cleanHost, origin: `${secure ? 'https' : 'http'}://${cleanHost}` }
+  const target = requestTarget(request)
+  return { host: target.host, origin: target.origin }
 }
 
 export function enforceSameOrigin(request) {

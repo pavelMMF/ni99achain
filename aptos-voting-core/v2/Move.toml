@@ -1,0 +1,18 @@
+[package]
+name = "AptosVotingCoreV2"
+version = "2.0.0"
+upgrade_policy = "compatible"
+authors = ["ni99chain contributors"]
+
+[addresses]
+aptos_voting_v2 = "_"
+
+[dev-addresses]
+aptos_voting_v2 = "0x42"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "eea778c2276e302119d6e469ec3dd0b78fcce039"
+subdir = "aptos-framework"
+
+[dev-dependencies]

@@ -2,12 +2,14 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 $dataRoot = if ($env:SOVET_ONLINE_DATA_DIR) { $env:SOVET_ONLINE_DATA_DIR } else { Join-Path $env:LOCALAPPDATA 'SovetOnline' }
-$configPath = Join-Path $dataRoot 'secrets\database.json'
+$configPath = Join-Path $dataRoot 'secrets\database-admin.json'
+$appConfigPath = Join-Path $dataRoot 'secrets\database.json'
 $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
 if (-not (Test-Path -LiteralPath $configPath)) { throw 'PostgreSQL is not configured.' }
 if (-not (Test-Path -LiteralPath $node)) { throw 'Node.js was not found.' }
 
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+$appConfig = Get-Content -LiteralPath $appConfigPath -Raw | ConvertFrom-Json
 $pgDump = Join-Path $dataRoot 'PostgreSQL17\pgsql\bin\pg_dump.exe'
 if (-not (Test-Path -LiteralPath $pgDump)) { throw 'pg_dump.exe was not found.' }
 
@@ -20,7 +22,7 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 try {
     $env:PGPASSWORD = $config.password
-    & $pgDump --host $config.host --port $config.port --username $config.user --dbname $config.database --format custom --no-password --file (Join-Path $stage 'database.dump')
+    & $pgDump --host $config.host --port $config.port --username $config.user --dbname $appConfig.database --format custom --no-password --file (Join-Path $stage 'database.dump')
     if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed.' }
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
 

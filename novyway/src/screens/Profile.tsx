@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { fetchParticipant, syncMyQualifications, type Participant } from '../adapters/participants'
 import { fmtDate, useT } from '../i18n'
 import { useSettings, useStore } from '../demo/store'
 import { CatChip, KV, Lvl, PageHead, Panel } from '../ui/components'
 import { ParticipationHeatmap } from '../ui/components/ParticipationHeatmap'
 import { AuthPanel } from '../ui/components/AuthPanel'
+import { VoterAdmissionStatus } from '../ui/components/VoterAdmissionPolicy'
 import { fmtW } from '../domain/weights'
 import { useAccountSession, type AccountUser } from '../auth/session'
 
@@ -24,8 +25,10 @@ export default function Profile() {
   const { t, l, lang } = useT()
   const { state } = useStore()
   const { s, update } = useSettings()
-  const { user, acceptUser } = useAccountSession()
+  const { user, acceptUser, logout } = useAccountSession()
+  const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
   const [name, setName] = useState('')
   const [telegram, setTelegram] = useState('')
   const [newEmail, setNewEmail] = useState('')
@@ -62,6 +65,17 @@ export default function Profile() {
     }
     return () => controller.abort()
   }, [participantUserId, participantCsrfToken])
+
+  async function signOut() {
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      await logout()
+    } finally {
+      setSigningOut(false)
+      navigate('/', { replace: true })
+    }
+  }
 
   if (!user) return <>
     <PageHead title={t('pr.title')} sub={ru ? 'Войдите, чтобы открыть личные данные, квалификации и голоса.' : 'Sign in to view your identity, qualifications, and votes.'} />
@@ -137,10 +151,15 @@ export default function Profile() {
     <PageHead
       title={t('pr.title')}
       sub={ru ? 'Данные аккаунта, Aptos-адрес и подтверждённая история участия.' : 'Account data, Aptos address, and verified participation history.'}
-      right={<button className="btn small" onClick={() => {
-        if (!editing) { setName(user.displayName || ''); setTelegram(user.telegram || '') }
-        setEditing((value) => !value)
-      }}>{editing ? t('common.close') : t('pr.editProfile')}</button>}
+      right={<div className="profile-head-actions">
+        <button className="btn small" onClick={() => {
+          if (!editing) { setName(user.displayName || ''); setTelegram(user.telegram || '') }
+          setEditing((value) => !value)
+        }}>{editing ? t('common.close') : t('pr.editProfile')}</button>
+        <button className="btn small profile-signout" type="button" disabled={signingOut} onClick={() => void signOut()}>
+          {signingOut ? (ru ? 'Выходим…' : 'Signing out…') : t('auth.signOut')}
+        </button>
+      </div>}
     />
 
     {editing && <Panel title={t('pr.editProfile')} className="profile-editor">
@@ -186,6 +205,8 @@ export default function Profile() {
         </div>
       </Panel>
     </div>
+
+    <VoterAdmissionStatus />
 
     <Panel className="profile-year-panel" title={ru ? 'Активность за год' : 'Yearly activity'} hint={participantLoading ? (ru ? 'обновляется' : 'updating') : undefined}>
       {participantError && <div className="callout red" role="alert">{participantError}</div>}

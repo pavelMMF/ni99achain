@@ -1,55 +1,165 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { useAccountSession } from '../../auth/session'
+import { hasWebsiteGovernanceAccess, useAccountSession } from '../../auth/session'
 import { readGovernanceAdminState, type GovernanceAdminState } from '../../adapters/aptos/adminAccess'
 import { useT } from '../../i18n'
+import { useOrganization } from '../../tenancy/OrganizationContext'
+import { DEFAULT_ORGANIZATION_SLUG } from '../../tenancy/organization'
 import { PageHead, Panel } from './index'
 
-const AdminContext = createContext<GovernanceAdminState | null>(null)
+export type GovernanceAdminContextState = GovernanceAdminState & {
+  siteSuperAdmin: boolean
+  governanceSignerActive: boolean
+  creatorSignerActive: boolean
+  legacyAvailable: boolean
+  legacyLoading: boolean
+  legacyError: string | null
+  retryLegacy: () => void
+}
+
+const AdminContext = createContext<GovernanceAdminContextState | null>(null)
+
+function GovernancePageHead({ ru }: { ru: boolean }) {
+  return (
+    <PageHead
+      title={ru ? 'Управление Советом' : 'Council governance'}
+      sub={ru
+        ? 'Роли, правила и голосования организации. Серверная панель остаётся отдельным локальным приложением.'
+        : 'Organization roles, rules, and elections. Server operations remain in the separate local application.'}
+    />
+  )
+}
 
 export function GovernanceAdminGate({ children }: { children: ReactNode }) {
   const { lang } = useT()
   const ru = lang === 'ru'
   const { user, loading: sessionLoading } = useAccountSession()
+  const { orgSlug } = useOrganization()
+  const hasSiteAccess = hasWebsiteGovernanceAccess(user)
+  const usesLegacyGovernance = orgSlug === DEFAULT_ORGANIZATION_SLUG
   const [state, setState] = useState<GovernanceAdminState | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
-    const signingAddress = user?.activeAptosAddress
-    if (!user?.isAdmin || !signingAddress) { setState(null); setLoading(false); return }
+    const accountAddress = user?.aptosAddress
+    if (!hasSiteAccess || !accountAddress || !usesLegacyGovernance) {
+      setState(null)
+      setLoading(false)
+      setError(null)
+      return
+    }
+
     let active = true
     setLoading(true)
     setError(null)
-    readGovernanceAdminState(signingAddress)
-      .then((next) => { if (active) setState(next) })
-      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : 'admin_check_failed') })
-      .finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
-  }, [user])
+    readGovernanceAdminState(accountAddress)
+      .then((next) => {
+        if (active) setState(next)
+      })
+      .catch((cause) => {
+        if (active) {
+          setState(null)
+          setError(cause instanceof Error ? cause.message : 'admin_check_failed')
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
 
-  if (sessionLoading || loading) return <div className="empty">{ru ? 'Проверяем полномочия администратора в Aptos…' : 'Checking administrator permissions on Aptos…'}</div>
-  if (!user) return <>
-    <PageHead title={ru ? 'Управление Советом' : 'Council governance'} sub={ru ? 'Административный кабинет сети, а не панель сервера.' : 'Network governance console, separate from server operations.'} />
-    <Panel title={ru ? 'Нужна авторизация' : 'Sign-in required'}><p className="muted">{ru ? 'Войдите аккаунтом, к которому привязан адрес администратора Совета.' : 'Sign in to the account linked to a Council administrator address.'}</p><Link className="btn primary" to="/auth?returnTo=%2Fadmin">{ru ? 'Перейти ко входу' : 'Sign in'}</Link></Panel>
-  </>
-  if (!user.isAdmin || !user.activeAptosAddress) return <>
-    <PageHead title={ru ? 'Управление Советом' : 'Council governance'} sub={ru ? 'Административный кабинет сети, а не панель сервера.' : 'Network governance console, separate from server operations.'} />
-    <Panel title={ru ? 'Нужна подпись администратора' : 'Administrator signature required'}>
-      <p>{ru ? 'Текущая сессия не подтверждена адресом, записанным администратором в контракте. Активируйте нужный способ входа; выходить из профиля не требуется.' : 'The current session is not confirmed by an address registered as a contract administrator. Activate the required sign-in method without leaving the profile.'}</p>
-      <Link className="btn primary" to="/auth?returnTo=%2Fadmin">{ru ? 'Выбрать адрес' : 'Choose address'}</Link>
-    </Panel>
-  </>
-  if (error) return <div className="callout red">{ru ? 'Не удалось проверить on-chain роль: ' : 'Could not verify the on-chain role: '}{error}</div>
-  if (!state?.isAdmin) return <>
-    <PageHead title={ru ? 'Управление Советом' : 'Council governance'} sub={ru ? 'Административный кабинет сети, а не панель сервера.' : 'Network governance console, separate from server operations.'} />
-    <Panel title={ru ? 'Доступ закрыт' : 'Access denied'}>
-      <p>{ru ? 'Этот Aptos-адрес не входит в действующий список администраторов контракта.' : 'This Aptos address is not in the contract administrator set.'}</p>
-      <code className="mono" style={{ overflowWrap: 'anywhere' }}>{user.activeAptosAddress}</code>
-      <p className="muted">{ru ? `Сейчас в сети ${state?.administrators.length ?? 0} администраторов; порог подтверждения ${state?.threshold ?? 0}.` : `The network currently has ${state?.administrators.length ?? 0} administrators with threshold ${state?.threshold ?? 0}.`}</p>
-    </Panel>
-  </>
-  return <AdminContext.Provider value={state}>{children}</AdminContext.Provider>
+    return () => {
+      active = false
+    }
+  }, [hasSiteAccess, reload, user?.aptosAddress, user?.id, usesLegacyGovernance])
+
+  if (sessionLoading) {
+    return <div className="empty">{ru ? 'Загружаем состояние управления из Aptos…' : 'Loading governance state from Aptos…'}</div>
+  }
+
+  if (!user) {
+    return (
+      <>
+        <GovernancePageHead ru={ru} />
+        <Panel title={ru ? 'Нужна авторизация' : 'Sign-in required'}>
+          <p className="muted">
+            {ru
+              ? 'Войдите в аккаунт администратора организации.'
+              : 'Sign in with an organization administrator account.'}
+          </p>
+          <Link className="btn primary" to="/auth?returnTo=%2Fadmin">{ru ? 'Перейти ко входу' : 'Sign in'}</Link>
+        </Panel>
+      </>
+    )
+  }
+
+  if (!hasSiteAccess) {
+    return (
+      <>
+        <GovernancePageHead ru={ru} />
+        <Panel title={ru ? 'Доступ закрыт' : 'Access denied'}>
+          <p>
+            {ru
+              ? 'Этот аккаунт не назначен администратором текущей организации.'
+              : 'This account is not an administrator of the current organization.'}
+          </p>
+        </Panel>
+      </>
+    )
+  }
+
+  const accountAddress = user.activeAptosAddress ?? user.aptosAddress
+  const effectiveState: GovernanceAdminState = state ?? {
+    address: accountAddress,
+    creator: accountAddress,
+    isCreator: false,
+    isAdmin: false,
+    administrators: [],
+    threshold: 0,
+    versions: ['0', '0', '0'],
+    counters: ['0', '0', '0', '0', '0', '0', '0', '0'],
+  }
+
+  const context: GovernanceAdminContextState = {
+    ...effectiveState,
+    siteSuperAdmin: user.isSuperAdmin,
+    governanceSignerActive: user.governanceSignerActive,
+    creatorSignerActive: user.creatorSignerActive,
+    legacyAvailable: usesLegacyGovernance && state !== null,
+    legacyLoading: usesLegacyGovernance && loading,
+    legacyError: usesLegacyGovernance ? error : null,
+    retryLegacy: () => setReload((value) => value + 1),
+  }
+
+  return (
+    <AdminContext.Provider value={context}>
+      {usesLegacyGovernance && !state && (
+        <div className={`callout ${error ? 'yellow' : 'cyan'} governance-legacy-warning`} role="status">
+          <strong>{loading
+            ? (ru ? 'Читаем состояние основного Совета из Aptos…' : 'Reading the main Council state from Aptos…')
+            : (ru ? 'Старое состояние Совета сейчас недоступно.' : 'The legacy Council state is currently unavailable.')}</strong>{' '}
+          {!loading && (
+            <>
+              {ru
+                ? 'Доступ к сайту подтверждён сервером, поэтому V2-настройки остаются доступны. Старые инструменты появятся после успешной проверки сети.'
+                : 'Website access is verified by the server, so V2 settings remain available. Legacy tools return after the network check succeeds.'}{' '}
+              <button className="btn small" type="button" onClick={context.retryLegacy}>{ru ? 'Повторить' : 'Retry'}</button>
+            </>
+          )}
+        </div>
+      )}
+      {!user.governanceSignerActive && (
+        <div className="callout yellow governance-signer-warning">
+          <strong>{ru ? 'Панель доступна, подпись не активна.' : 'Console access is active; signing is not.'}</strong>{' '}
+          {ru
+            ? 'Вы можете просматривать настройки. Для отправки транзакций подключите Aptos-кошелёк администратора в разделе способов входа.'
+            : 'You can inspect settings. Connect an administrator Aptos wallet in sign-in methods before submitting transactions.'}{' '}
+          <Link to="/auth?returnTo=%2Fadmin">{ru ? 'Выбрать способ подписи' : 'Choose signing method'}</Link>
+        </div>
+      )}
+      {children}
+    </AdminContext.Provider>
+  )
 }
 
 // oxlint-disable-next-line react/only-export-components

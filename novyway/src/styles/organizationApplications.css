@@ -1,0 +1,318 @@
+.organization-application-privacy {
+  margin-bottom: 18px;
+}
+
+.organization-application-privacy strong,
+.organization-application-card .callout strong,
+.organization-approved-callout strong {
+  color: var(--ink);
+}
+
+.organization-application-list {
+  display: grid;
+  gap: 12px;
+}
+
+.organization-application-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.organization-application-card header,
+.organization-application-card footer,
+.organization-approved-callout,
+.platform-review-toolbar,
+.platform-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.organization-application-card header > div {
+  display: grid;
+  gap: 7px;
+}
+
+.organization-application-card h2 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.organization-application-card code,
+.organization-application-meta code,
+.platform-review-list code {
+  color: var(--cyan-ink);
+  overflow-wrap: anywhere;
+}
+
+.organization-application-card p {
+  max-width: 860px;
+  margin: 0;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.organization-application-card .callout {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.organization-application-card footer {
+  justify-content: flex-start;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.organization-application-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: -5px 0 18px;
+  color: var(--ink-2);
+}
+
+.organization-approved-callout {
+  margin-bottom: 18px;
+}
+
+.application-stepper {
+  margin-top: 20px;
+}
+
+.organization-application-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--border);
+}
+
+.organization-application-summary > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 14px 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.organization-application-summary dt {
+  color: var(--ink-2);
+  font: 11px/1.4 var(--font-code);
+  text-transform: uppercase;
+}
+
+.organization-application-summary dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.organization-application-events {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.organization-application-events li {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.organization-application-events li:last-child {
+  border-bottom: 0;
+}
+
+.organization-application-events .dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--cyan);
+}
+
+.organization-application-events div {
+  display: grid;
+  gap: 4px;
+}
+
+.organization-application-events p {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.organization-application-events time {
+  color: var(--ink-2);
+  font: 11px/1.4 var(--font-code);
+}
+
+.platform-review-toolbar {
+  justify-content: flex-start;
+  margin: 18px 0;
+}
+
+.platform-review-toolbar .field {
+  width: min(320px, 100%);
+}
+
+.platform-review-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, .72fr) minmax(0, 1.7fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.platform-review-list {
+  position: sticky;
+  top: 82px;
+  display: grid;
+  max-height: calc(100dvh - 110px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  scrollbar-color: var(--cyan) var(--surface-2);
+}
+
+.platform-review-list button {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-height: 108px;
+  padding: 14px;
+  text-align: left;
+  color: var(--ink);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  background: transparent;
+  cursor: pointer;
+}
+
+.platform-review-list button:last-child {
+  border-bottom: 0;
+}
+
+.platform-review-list button:hover,
+.platform-review-list button:focus-visible {
+  background: var(--surface-2);
+}
+
+.platform-review-list button.active {
+  border-left-color: var(--cyan);
+  background: var(--cyan-tint);
+}
+
+.platform-review-list .chip {
+  justify-self: start;
+}
+
+.platform-review-list small {
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.platform-review-detail {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.platform-review-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, .8fr);
+  gap: 22px;
+}
+
+.platform-review-heading p {
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.platform-review-heading dl {
+  margin: 0;
+}
+
+.platform-review-heading dl > div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.platform-review-heading dt {
+  color: var(--ink-2);
+}
+
+.platform-review-heading dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.platform-review-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+@media (max-width: 980px) {
+  .platform-review-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-review-list {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: none;
+  }
+
+  .platform-review-list button {
+    border-right: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 700px) {
+  .organization-application-card header,
+  .organization-application-card footer,
+  .organization-approved-callout,
+  .platform-review-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .organization-application-card footer .btn,
+  .organization-approved-callout .btn,
+  .platform-review-toolbar .btn,
+  .platform-review-toolbar .field {
+    width: 100%;
+  }
+
+  .organization-application-summary,
+  .platform-review-heading,
+  .platform-review-list {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-review-list button {
+    min-height: 96px;
+    border-right: 0;
+  }
+
+  .platform-review-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .platform-review-actions .btn {
+    width: 100%;
+  }
+}

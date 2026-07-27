@@ -16,6 +16,11 @@
     "verify:logic": "node server/Verify-Logic-Game.mjs",
     "verify:logic:storage": "node server/Verify-Logic-Game-Storage.mjs",
     "verify:creator": "node server/Verify-Creator-Account.mjs",
+    "verify:authorization": "node server/Verify-Authorization.mjs",
+    "verify:organization-routing": "node server/Verify-Organization-Routing.mjs",
+    "verify:organization-applications": "node server/Verify-Organization-Applications-Postgres.mjs",
+    "verify:voter-admission": "node server/Verify-Voter-Admission.mjs",
+    "verify:music": "node server/Verify-Music-Playback.mjs",
     "preflight:creator": "node server/Preflight-Creator-Account.mjs",
     "preview": "vite preview",
     "build:single": "vite build --config vite.singlefile.config.ts"

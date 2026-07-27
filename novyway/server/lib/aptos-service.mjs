@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
   AccountAuthenticator,
+  AccountAddress,
   Aptos,
   AptosConfig,
   Deserializer,
@@ -47,6 +48,11 @@ function loadOrCreateRelayer() {
 }
 
 const relayer = loadOrCreateRelayer()
+
+function accountFromPrivateKey(privateKey) {
+  if (!privateKey) return relayer
+  return new Ed25519Account({ privateKey: new Ed25519PrivateKey(privateKey) })
+}
 
 export const aptosRuntime = {
   network: 'testnet',
@@ -167,12 +173,20 @@ export function createManagedAccount() {
   return { aptosAddress: account.accountAddress.toString(), privateKey: account.privateKey.toString() }
 }
 
-export async function aptosStatus() {
+export function createOrganizationRelayer() {
+  return createManagedAccount()
+}
+
+export async function aptosAccountBalance(accountAddress) {
+  return aptosClient.getAccountAPTAmount({ accountAddress }).catch(() => 0)
+}
+
+export async function aptosStatus({ relayerAddress = aptosRuntime.relayerAddress } = {}) {
   const started = performance.now()
   try {
     const [ledger, balance, parity] = await Promise.all([
       aptosClient.getLedgerInfo(),
-      aptosClient.getAccountAPTAmount({ accountAddress: relayer.accountAddress }).catch(() => 0),
+      aptosAccountBalance(relayerAddress),
       verifyPublishedModules(),
     ])
     return {
@@ -180,7 +194,7 @@ export async function aptosStatus() {
       latencyMs: Math.round(performance.now() - started),
       ledgerVersion: ledger.ledger_version,
       chainId: ledger.chain_id,
-      relayerAddress: aptosRuntime.relayerAddress,
+      relayerAddress,
       relayerBalanceOctas: String(balance),
       relayerBalanceApt: Number(balance) / 100_000_000,
       sourceParityVerified: parity.verified,
@@ -192,7 +206,7 @@ export async function aptosStatus() {
     return {
       ok: false,
       latencyMs: Math.round(performance.now() - started),
-      relayerAddress: aptosRuntime.relayerAddress,
+      relayerAddress,
       error: error instanceof Error ? error.message : 'aptos_unavailable',
       sourceParityVerified: false,
       reproducibleSourceVerified: false,
@@ -202,7 +216,14 @@ export async function aptosStatus() {
   }
 }
 
-export async function buildSponsoredVote({ senderAddress, electionId, yesBps, noBps, abstainBps }) {
+export async function buildSponsoredVote({
+  senderAddress,
+  electionId,
+  yesBps,
+  noBps,
+  abstainBps,
+  feePayerAddress = aptosRuntime.relayerAddress,
+}) {
   const transaction = await aptosClient.transaction.build.simple({
     sender: senderAddress,
     withFeePayer: true,
@@ -216,21 +237,26 @@ export async function buildSponsoredVote({ senderAddress, electionId, yesBps, no
       expireTimestamp: Math.floor(Date.now() / 1000) + 300,
     },
   })
-  transaction.feePayerAddress = relayer.accountAddress
+  transaction.feePayerAddress = AccountAddress.fromString(feePayerAddress)
   return {
     rawTransactionB64: Buffer.from(transaction.bcsToBytes()).toString('base64'),
     expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
     preview: {
       network: 'testnet',
       senderAddress,
-      feePayerAddress: relayer.accountAddress.toString(),
+      feePayerAddress,
       function: `${moduleAddress}::weighted_voting::cast_vote`,
       arguments: { electionId, yesBps, noBps, abstainBps },
     },
   }
 }
 
-export async function buildSponsoredEqualAdminVote({ senderAddress, adminElectionId, choice }) {
+export async function buildSponsoredEqualAdminVote({
+  senderAddress,
+  adminElectionId,
+  choice,
+  feePayerAddress = aptosRuntime.relayerAddress,
+}) {
   const transaction = await aptosClient.transaction.build.simple({
     sender: senderAddress,
     withFeePayer: true,
@@ -244,12 +270,12 @@ export async function buildSponsoredEqualAdminVote({ senderAddress, adminElectio
       expireTimestamp: Math.floor(Date.now() / 1000) + 300,
     },
   })
-  transaction.feePayerAddress = relayer.accountAddress
+  transaction.feePayerAddress = AccountAddress.fromString(feePayerAddress)
   return {
     rawTransactionB64: Buffer.from(transaction.bcsToBytes()).toString('base64'),
     expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
     preview: {
-      network: 'testnet', senderAddress, feePayerAddress: relayer.accountAddress.toString(),
+      network: 'testnet', senderAddress, feePayerAddress,
       function: `${moduleAddress}::admin_election::cast_equal_vote`,
       arguments: { adminElectionId, choice },
     },
@@ -266,8 +292,9 @@ export function deserializeAuthenticator(senderAuthenticatorB64) {
   return AccountAuthenticator.deserialize(new Deserializer(bytes))
 }
 
-export async function submitSponsoredVote({ transaction, senderAuthenticator }) {
-  const feePayerAuthenticator = aptosClient.transaction.signAsFeePayer({ signer: relayer, transaction })
+export async function submitSponsoredVote({ transaction, senderAuthenticator, feePayerPrivateKey = null }) {
+  const feePayer = accountFromPrivateKey(feePayerPrivateKey)
+  const feePayerAuthenticator = aptosClient.transaction.signAsFeePayer({ signer: feePayer, transaction })
   return aptosClient.transaction.submit.simple({
     transaction,
     senderAuthenticator,
@@ -275,13 +302,17 @@ export async function submitSponsoredVote({ transaction, senderAuthenticator }) 
   })
 }
 
-export async function submitManagedSponsoredVote({ transaction, privateKey }) {
+export async function submitManagedSponsoredVote({
+  transaction,
+  privateKey,
+  feePayerPrivateKey = null,
+}) {
   const signer = new Ed25519Account({ privateKey: new Ed25519PrivateKey(privateKey) })
   if (transaction.rawTransaction.sender.toString().toLowerCase() !== signer.accountAddress.toString().toLowerCase()) {
     throw Object.assign(new Error('managed_wallet_sender_mismatch'), { status: 403 })
   }
   const senderAuthenticator = aptosClient.transaction.sign({ signer, transaction })
-  return submitSponsoredVote({ transaction, senderAuthenticator })
+  return submitSponsoredVote({ transaction, senderAuthenticator, feePayerPrivateKey })
 }
 
 export async function waitForVote(txHash) {

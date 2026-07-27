@@ -9,7 +9,9 @@ import { TimeThreads } from '../components/TimeThreads'
 import { MusicPlayer } from './MusicPlayer'
 import { BrandMark } from './BrandMark'
 import { currentRuntimeMode } from '../../adapters/types'
-import { useAccountSession } from '../../auth/session'
+import { hasWebsiteGovernanceAccess, useAccountSession } from '../../auth/session'
+import { useOrganization } from '../../tenancy/OrganizationContext'
+import { DEFAULT_ORGANIZATION_SLUG } from '../../tenancy/organization'
 
 const mainNav = [
   { to: '/', key: 'nav.overview', idx: '01' },
@@ -22,6 +24,11 @@ const serviceNav = [
   { to: '/exams', key: 'nav.exams', idx: '05' },
   { to: '/audit', key: 'nav.audit', idx: '06' },
   { to: '/admin', key: 'nav.admin', idx: '07' },
+  { to: '/organization/access', key: 'nav.access', idx: '08' },
+] as const
+
+const platformServiceNav = [
+  { to: '/platform/organization-applications', key: 'nav.applications', idx: '09' },
 ] as const
 
 // Пиктограммы разделов: 18px, stroke = currentcolor, без внешних зависимостей.
@@ -33,7 +40,9 @@ const navIcons: Record<string, ReactNode> = {
   'nav.participants': <svg width="18" height="18" viewBox="0 0 24 24" {...strokeProps}><circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.4" /><path d="M2.8 19c.5-3.5 2.3-5.5 5.2-5.5s4.7 2 5.2 5.5M13.6 14.5c2.7-.5 5.1 1 5.8 4" /></svg>,
   'nav.exams': <svg width="18" height="18" viewBox="0 0 24 24" {...strokeProps}><path d="m12 4 9 4.4-9 4.4-9-4.4z" /><path d="M6.5 10.6v5c0 1.3 2.5 2.9 5.5 2.9s5.5-1.6 5.5-2.9v-5" /></svg>,
   'nav.audit': <svg width="18" height="18" viewBox="0 0 24 24" {...strokeProps}><path d="M7 3.5h10v17l-2.5-1.6L12 20.5l-2.5-1.6L7 20.5z" /><path d="M10 8h4.5M10 11.5h4.5" /></svg>,
+  'nav.access': <svg width="18" height="18" viewBox="0 0 24 24" {...strokeProps}><path d="M12 3.5 19 6v5.4c0 4.4-3 8-7 9.1-4-1.1-7-4.7-7-9.1V6z" /><path d="M8.5 12h7M12 8.5v7" /></svg>,
   'nav.admin': <svg width="18" height="18" viewBox="0 0 24 24" {...strokeProps}><path d="M12 3.5 19 6v5.4c0 4.4-3 8-7 9.1-4-1.1-7-4.7-7-9.1V6z" /><path d="m9.3 11.8 2 2 3.6-3.9" /></svg>,
+  'nav.applications': <svg width="18" height="18" viewBox="0 0 24 24" {...strokeProps}><path d="M6 3.5h9l3 3v14H6z" /><path d="M9 10h6M9 14h6M9 17.5h4" /></svg>,
 }
 
 function NavItems({ items }: { items: ReadonlyArray<{ to: string; key: string; idx: string }> }) {
@@ -63,8 +72,14 @@ function NavItems({ items }: { items: ReadonlyArray<{ to: string; key: string; i
 export function AppShell({ children }: { children: ReactNode }) {
   const { t, lang } = useT()
   const { user } = useAccountSession()
+  const { branding, orgSlug } = useOrganization()
   const runtimeMode = currentRuntimeMode()
-  const visibleServiceNav = user?.isAdmin ? serviceNav : serviceNav.filter((item) => item.to !== '/admin')
+  const organizationServiceNav = hasWebsiteGovernanceAccess(user)
+    ? serviceNav
+    : serviceNav.filter((item) => !['/admin', '/organization/access'].includes(item.to))
+  const visibleServiceNav = user?.isSuperAdmin && orgSlug === DEFAULT_ORGANIZATION_SLUG
+    ? [...organizationServiceNav, ...platformServiceNav]
+    : organizationServiceNav
   const profileInitials = (user?.displayName || user?.email || 'НП').trim().split(/\s+/).slice(0, 2).map((word) => word[0]?.toUpperCase() ?? '').join('') || 'НП'
   const initials = lang === 'en' && /[А-Яа-яЁё]/.test(profileInitials) ? 'ME' : profileInitials
   const location = useLocation()
@@ -87,8 +102,25 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [sidebarCollapsed])
 
   useEffect(() => {
-    document.title = lang === 'ru' ? 'Новый Путь' : 'New Path'
-  }, [lang])
+    document.title = branding.displayName
+  }, [branding.displayName])
+
+  useEffect(() => {
+    const root = document.documentElement
+    const previous = root.style.getPropertyValue('--organization-accent')
+    root.style.setProperty('--organization-accent', branding.accentColor)
+    return () => {
+      if (previous) root.style.setProperty('--organization-accent', previous)
+      else root.style.removeProperty('--organization-accent')
+    }
+  }, [branding.accentColor])
+
+  const organizationSubtitle = orgSlug === DEFAULT_ORGANIZATION_SLUG
+    ? (lang === 'ru' ? 'прямые решения' : 'direct decisions')
+    : (lang === 'ru' ? 'пространство решений' : 'decision workspace')
+  const brandVisual = branding.logoUrl
+    ? <img src={branding.logoUrl} alt="" />
+    : <BrandMark ariaLabel={branding.displayName} />
 
   return (
     <div className={`shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -96,11 +128,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         <aside className="sidebar">
           <div className="brand">
             <button className="brand-trigger" onClick={() => { setGameOpen(true); sound.play('confirm') }} aria-label={t('nav.game')} title={t('nav.game')}>
-              <span className="brand-mark"><BrandMark /></span>
+              <span className="brand-mark">{brandVisual}</span>
             </button>
-            <NavLink to="/" className="brand-copy brand-home" data-silent onClick={() => sound.play('navigate')}>
-              <div className="brand-name">{lang === 'ru' ? 'НОВЫЙ ПУТЬ' : 'NEW PATH'}</div>
-              <div className="brand-sub">{lang === 'ru' ? 'прямые решения' : 'direct decisions'}</div>
+            <NavLink to="/about" className="brand-copy brand-home" data-silent onClick={() => sound.play('navigate')}>
+              <div className="brand-name">{branding.shortName}</div>
+              <div className="brand-sub">{organizationSubtitle}</div>
             </NavLink>
           </div>
           <button
@@ -118,17 +150,17 @@ export function AppShell({ children }: { children: ReactNode }) {
             <NavItems items={visibleServiceNav} />
           </nav>
           <div className="sidebar-foot">
-            <a className="telegram-link" href="https://t.me/online_council" target="_blank" rel="noreferrer">
-              Telegram · @online_council
-            </a>
+            {orgSlug === DEFAULT_ORGANIZATION_SLUG
+              ? <a className="telegram-link" href="https://t.me/online_council" target="_blank" rel="noreferrer">Telegram · @online_council</a>
+              : <span className="telegram-link">{lang === 'ru' ? 'На платформе Новый Путь' : 'Powered by New Path'}</span>}
             <span className="chip live"><span className="dot" /> {runtimeMode === 'demo' ? t('common.demo') : 'Aptos Testnet'}</span>
           </div>
         </aside>
 
       <div className="main">
         <div className="mobile-brand-trigger">
-          <button onClick={() => { setGameOpen(true); sound.play('confirm') }} aria-label={t('nav.game')} title={t('nav.game')}><span className="brand-mark"><BrandMark /></span></button>
-          <NavLink to="/" data-silent onClick={() => sound.play('navigate')}>{lang === 'ru' ? 'НОВЫЙ ПУТЬ' : 'NEW PATH'}</NavLink>
+          <button onClick={() => { setGameOpen(true); sound.play('confirm') }} aria-label={t('nav.game')} title={t('nav.game')}><span className="brand-mark">{brandVisual}</span></button>
+          <NavLink to="/about" data-silent onClick={() => sound.play('navigate')}>{branding.shortName}</NavLink>
         </div>
         <header className="topbar app-topbar">
           <div className="spacer" />
@@ -143,7 +175,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               <span className="top-label">{user ? (user.displayName?.trim() || t('nav.profile')) : t('nav.profile')}</span>
               <small className="profile-signal-status">
                 {user
-                  ? shortAddr(user.activeAptosAddress ?? user.aptosAddress)
+                  ? shortAddr(user.aptosAddress)
                   : (lang === 'ru' ? 'войти в кабинет' : 'sign in')}
               </small>
             </span>
@@ -170,10 +202,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
 
       <ToastHost />
-      {!['/auth', '/profile', '/admin'].includes(location.pathname) && <IdleSignals />}
+      {!['/auth', '/profile', '/admin', '/organization/access'].includes(location.pathname) && <IdleSignals />}
 
       {gameOpen && (
-        <div className="game-modal" role="dialog" aria-modal="true" aria-label={t('nav.game')} onMouseDown={() => setGameOpen(false)}>
+        <div className="game-modal" role="dialog" aria-modal="true" aria-labelledby="logic-game-title" onKeyDown={(event) => { if (event.key === 'Escape') setGameOpen(false) }} onMouseDown={() => setGameOpen(false)}>
           <div className="game-dialog" onMouseDown={(event) => event.stopPropagation()}>
             <button className="icon-btn game-close" onClick={() => setGameOpen(false)} aria-label={t('common.close')}>×</button>
             <SignalCircuit />

@@ -7,6 +7,7 @@ import type { ElectionStatus } from '../domain/types'
 import { fmtDate, shortAddr, useT } from '../i18n'
 import { PageHead, Panel, StatusChip } from '../ui/components'
 import { AdminElectionRegister } from '../ui/components/AdminElectionRegister'
+import { useAccessibleIds } from '../tenancy/access'
 
 const statusFilters: (ElectionStatus | 'all')[] = ['all', 'active', 'upcoming', 'awaiting_finalization', 'passed', 'rejected', 'quorum_failed']
 const colors = ['var(--cyan)', 'var(--cat-law)', 'var(--cat-ecology)', 'var(--cat-education)']
@@ -32,14 +33,21 @@ export function LiveElections() {
   const { data, loading, error, refresh } = useLiveVoting()
   const [status, setStatus] = useState<(typeof statusFilters)[number]>('all')
   const [category, setCategory] = useState('all')
+  const electionIds = (data?.elections ?? []).map((election) => election.id)
+  const access = useAccessibleIds('election', electionIds, 'discover')
+  const subjectAccess = useAccessibleIds('election', electionIds, 'subject')
+  const resultsAccess = useAccessibleIds('election', electionIds, 'results')
+  const ballotsAccess = useAccessibleIds('election', electionIds, 'ballots')
   const rows = (data?.elections ?? []).filter((election) =>
-    (status === 'all' || election.status === status) && (category === 'all' || election.categoryId === category))
+    access.allowed?.has(election.id)
+    && (status === 'all' || election.status === status)
+    && (category === 'all' || election.categoryId === category))
 
   return (
     <>
       <PageHead
         title={t('el.title')}
-        sub={ru ? 'Состояние загружается напрямую из модуля Aptos Testnet' : 'State is loaded directly from the Aptos Testnet module'}
+
         right={<a className="btn small" href={aptosTestnetExplorer(`account/${configuredVotingModule()}/modules`)} target="_blank" rel="noreferrer">{ru ? 'Модуль в обозревателе' : 'Open module in Explorer'} ↗</a>}
       />
       <div className="row live-election-toolbar">
@@ -52,6 +60,7 @@ export function LiveElections() {
         </select>
         <button className="btn small" onClick={refresh} disabled={loading}>{ru ? 'Обновить' : 'Refresh'}</button>
       </div>
+      {(access.error || subjectAccess.error || resultsAccess.error || ballotsAccess.error) && <div className="callout red">{ru ? 'Не удалось проверить права доступа.' : 'Could not verify access.'}</div>}
       {error && <div className="callout red" style={{ marginBottom: 14 }}>{ru ? 'Не удалось прочитать сеть: ' : 'Could not read the network: '}{error}</div>}
       <AdminElectionRegister />
       <Panel>
@@ -65,20 +74,24 @@ export function LiveElections() {
               const totalChoice = yes + no
               const support = totalChoice > 0n ? Number((yes * 10000n) / totalChoice) / 100 : 0
               const turnoutWeight = ((BigInt(election.yesUnits) + BigInt(election.noUnits) + BigInt(election.abstainUnits)) / 10000n).toString()
+              const subjectVisible = subjectAccess.allowed?.has(election.id) ?? false
+              const resultsVisible = resultsAccess.allowed?.has(election.id) ?? false
+              const ballotsVisible = ballotsAccess.allowed?.has(election.id) ?? false
+              const statusRevealsResult = ['passed', 'rejected', 'quorum_failed'].includes(election.status)
               return <tr key={election.id} className="rowlink" onClick={() => nav(`/elections/chain-${election.id}`)}>
                 <td data-l={ru ? '№' : 'ID'} className="mono muted">{election.id}</td>
                 <td data-l={t('common.category')}><span className="chip" style={{ color: colors[Number(election.categoryId) % colors.length], borderColor: 'currentcolor' }}>{categoryName(categoryItem?.name, election.categoryId, ru)}</span></td>
-                <td data-l={ru ? 'Данные голосования' : 'Election data'}><strong>{ru ? `Голосование №${election.id}` : `Election #${election.id}`}</strong><div className="muted mono" style={{ fontSize: 11 }}>{ru ? 'метаданные' : 'metadata'} {shortAddr(election.metadataHash)} · {ru ? 'снимок состава' : 'membership snapshot'} {election.membershipVersion} · {ru ? 'версия правил' : 'policy version'} {election.policyVersion}</div></td>
-                <td data-l={t('common.support')} className="num">{support.toFixed(1)}%</td>
-                <td data-l={t('common.quorum')} className="num">{pct(turnoutWeight, election.eligibleTotal)}% / {election.quorumBps / 100}%</td>
+                <td data-l={ru ? 'Данные голосования' : 'Election data'}><strong>{ru ? `Голосование №${election.id}` : `Election #${election.id}`}</strong><div className="muted mono" style={{ fontSize: 11 }}>{subjectVisible && <>{ru ? 'метаданные' : 'metadata'} {shortAddr(election.metadataHash)} · </>}{ru ? 'снимок состава' : 'membership snapshot'} {election.membershipVersion} · {ru ? 'версия правил' : 'policy version'} {election.policyVersion}</div></td>
+                <td data-l={t('common.support')} className="num">{resultsVisible ? `${support.toFixed(1)}%` : '—'}</td>
+                <td data-l={t('common.quorum')} className="num">{resultsVisible ? `${pct(turnoutWeight, election.eligibleTotal)}% / ${election.quorumBps / 100}%` : '—'}</td>
                 <td data-l={t('common.deadline')} className="mono" style={{ fontSize: 12.5 }}>{fmtDate(new Date(Number(election.endsAtSecs) * 1000).toISOString(), lang, true)}</td>
-                <td data-l={t('common.status')}><StatusChip status={election.status} /></td>
-                <td data-l={ru ? 'Участники' : 'Voters'} className="num">{election.uniqueVoters}</td>
+                <td data-l={t('common.status')}>{statusRevealsResult && !resultsVisible ? <span className="chip mute">{ru ? 'Завершено' : 'Closed'}</span> : <StatusChip status={election.status} />}</td>
+                <td data-l={ru ? 'Участники' : 'Voters'} className="num">{ballotsVisible ? election.uniqueVoters : '—'}</td>
               </tr>
             })}
           </tbody>
         </table>
-        {loading && !data && <div className="empty">{ru ? 'Читаем состояние Aptos Testnet…' : 'Reading Aptos Testnet state…'}</div>}
+        {((loading && !data) || access.loading || subjectAccess.loading || resultsAccess.loading || ballotsAccess.loading) && <div className="empty">{ru ? 'Читаем состояние Aptos Testnet…' : 'Reading Aptos Testnet state…'}</div>}
         {!loading && rows.length === 0 && <div className="empty">{t('au.empty')}</div>}
       </Panel>
     </>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { fmtDate, useT } from '../i18n'
 import { exams, groupCountsOf, useDocuments, useStore } from '../demo/adminHelpers'
 import { AccountRef, KV, Lvl, PageHead, Panel } from '../ui/components'
@@ -11,29 +11,41 @@ import { AdminMembership } from '../ui/components/AdminMembership'
 import { DocumentElectionManager } from '../ui/components/DocumentElectionManager'
 import { currentRuntimeMode } from '../adapters/types'
 import { useAccountSession } from '../auth/session'
+import { VoterAdmissionPolicy } from '../ui/components/VoterAdmissionPolicy'
+import { useOrganization } from '../tenancy/OrganizationContext'
+import { DEFAULT_ORGANIZATION_SLUG } from '../tenancy/organization'
 
-type Tab = 'admins' | 'quals' | 'policies' | 'election' | 'content' | 'log'
+type Tab = 'admins' | 'admission' | 'quals' | 'policies' | 'election' | 'content' | 'log'
 
 export default function Admin() {
   const { t, lang } = useT()
   const admin = useGovernanceAdmin()
   const { user } = useAccountSession()
-  const canManageMembership = admin.isCreator && user?.isSuperAdmin === true
+  const organization = useOrganization()
+  const isDefaultOrganization = organization.orgSlug === DEFAULT_ORGANIZATION_SLUG
+  const legacyToolsAvailable = isDefaultOrganization && admin.legacyAvailable
+  const canManageMembership = user?.isSuperAdmin === true && legacyToolsAvailable
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab') as Tab | null
-  const requestedTabAllowed = requestedTab !== null
-    && ['admins', 'quals', 'policies', 'election', 'content', 'log'].includes(requestedTab)
-    && (requestedTab !== 'admins' || canManageMembership)
-  const [tab, setTab] = useState<Tab>(requestedTabAllowed ? requestedTab : (canManageMembership ? 'admins' : 'quals'))
 
   const tabs: { id: Tab; label: string }[] = [
     ...(canManageMembership ? [{ id: 'admins' as const, label: lang === 'ru' ? 'Состав Совета' : 'Council membership' }] : []),
-    { id: 'quals', label: t('ad.quals') },
-    { id: 'policies', label: t('ad.policies') },
-    { id: 'election', label: t('ad.newElection') },
-    { id: 'content', label: t('ad.content') },
-    { id: 'log', label: t('ad.log') },
+    { id: 'admission', label: lang === 'ru' ? 'Допуск участников' : 'Voter admission' },
+    ...(legacyToolsAvailable ? [
+      { id: 'quals' as const, label: t('ad.quals') },
+      { id: 'policies' as const, label: t('ad.policies') },
+      { id: 'election' as const, label: t('ad.newElection') },
+      { id: 'content' as const, label: t('ad.content') },
+      { id: 'log' as const, label: t('ad.log') },
+    ] : []),
   ]
+  const defaultTab: Tab = canManageMembership ? 'admins' : 'admission'
+  const requestedTabAllowed = requestedTab !== null && tabs.some((item) => item.id === requestedTab)
+  const [tab, setTab] = useState<Tab>(requestedTabAllowed ? requestedTab : defaultTab)
+  const activeTab = requestedTabAllowed
+    ? requestedTab
+    : tabs.some((item) => item.id === tab) ? tab : defaultTab
+
   function selectTab(next: Tab) {
     setTab(next)
     const nextParams = new URLSearchParams(searchParams)
@@ -41,35 +53,63 @@ export default function Admin() {
     setSearchParams(nextParams, { replace: true })
   }
 
+  const organizationTitle = isDefaultOrganization
+    ? (lang === 'ru' ? 'Управление Советом' : 'Council governance')
+    : (lang === 'ru' ? `Управление: ${organization.branding.shortName}` : `Manage: ${organization.branding.shortName}`)
 
   return (
     <>
       <PageHead
-        title={lang === 'ru' ? 'Управление Советом' : 'Council governance'}
-        sub={lang === 'ru' ? 'On-chain роли, квалификации, политики весов, категории и голосования.' : 'On-chain roles, qualifications, weight policies, categories, and elections.'}
-        right={<span className="chip crit mono">{t('ad.threshold')}: {admin.threshold}/{admin.administrators.length}</span>}
-      />
+        title={organizationTitle}
+        sub={legacyToolsAvailable
+          ? (lang === 'ru' ? 'On-chain роли, квалификации, политики весов, категории и голосования.' : 'On-chain roles, qualifications, weight policies, categories, and elections.')
+          : (lang === 'ru' ? 'Настройки участия и V2-контракта относятся только к текущей организации.' : 'Participation and V2 contract settings apply only to the current organization.')}
+        right={
+          <div className="admin-head-actions">
+            {user?.isSuperAdmin && (
+              <>
+                <Link className="btn small" to="/platform/organization-applications">
+                  {lang === 'ru' ? 'Заявки организаций' : 'Organization review'}
+                </Link>
+                <Link className="btn small" to="/organizations/new">
+                  {lang === 'ru' ? 'Новая заявка' : 'New application'}
+                </Link>
+              </>
+            )}
+            {legacyToolsAvailable
+              ? <span className="chip crit mono">{t('ad.threshold')}: {admin.threshold}/{admin.administrators.length}</span>
+              : <span className="chip live mono">Aptos V2</span>}
+          </div>
+        }      />
       <div className="callout cyan governance-scope-note">
-        <strong>{lang === 'ru' ? 'Это админ-панель Совета.' : 'This is the Council governance console.'}</strong>{' '}
+        <strong>{lang === 'ru' ? 'Это админ-панель организации.' : 'This is the organization governance console.'}</strong>{' '}
         {lang === 'ru' ? 'Она не управляет сервером, PostgreSQL, доменом или резервными копиями. Эти функции доступны только локально через Sovet-Online-Admin.exe.' : 'It does not manage the server, PostgreSQL, domain, or backups. Those controls are local-only in Sovet-Online-Admin.exe.'}
+        {!isDefaultOrganization && (
+          <span className="governance-scope-links">{' '}<Link to="/organization/access">{lang === 'ru' ? 'Роли и доступы' : 'Roles and access'}</Link> · <Link to="/organization/setup">{lang === 'ru' ? 'Настройка организации' : 'Organization setup'}</Link></span>
+        )}
       </div>
-      <div className="grid c3 governance-live-strip">
-        <Panel tight title={lang === 'ru' ? 'Администраторы' : 'Administrators'}><strong className="mono">{admin.administrators.length}</strong><span className="muted"> · {lang === 'ru' ? 'порог' : 'threshold'} {admin.threshold}</span></Panel>
-        <Panel tight title={lang === 'ru' ? 'Версии состояния' : 'State versions'}><span className="mono">{admin.versions.join(' / ')}</span></Panel>
-        <Panel tight title={lang === 'ru' ? 'Ваш Aptos-адрес' : 'Your Aptos address'}><span className="mono governance-address">{admin.address}</span></Panel>
-      </div>
-      <div className="callout green governance-draft-note">{lang === 'ru' ? 'Состав Совета, выборы администраторов и голосования по поправкам работают через Aptos Testnet. Редакторы квалификаций, политик и контента пока сохраняют демонстрационные черновики.' : 'Council membership, administrator elections, and amendment elections operate through Aptos Testnet. Qualification, policy, and content editors still save demonstration drafts.'}</div>
+      {legacyToolsAvailable && (
+        <>
+          <div className="grid c3 governance-live-strip">
+            <Panel tight title={lang === 'ru' ? 'Администраторы' : 'Administrators'}><strong className="mono">{admin.administrators.length}</strong><span className="muted"> · {lang === 'ru' ? 'порог' : 'threshold'} {admin.threshold}</span></Panel>
+            <Panel tight title={lang === 'ru' ? 'Версии состояния' : 'State versions'}><span className="mono">{admin.versions.join(' / ')}</span></Panel>
+            <Panel tight title={lang === 'ru' ? 'Ваш Aptos-адрес' : 'Your Aptos address'}><span className="mono governance-address">{admin.address}</span></Panel>
+          </div>
+          <div className="callout green governance-draft-note">{lang === 'ru' ? 'Состав Совета, выборы администраторов и голосования по поправкам работают через Aptos Testnet. Редакторы квалификаций, политик и контента пока сохраняют демонстрационные черновики.' : 'Council membership, administrator elections, and amendment elections operate through Aptos Testnet. Qualification, policy, and content editors still save demonstration drafts.'}</div>
+        </>
+      )}
       <div className="seg admin-tabs" role="tablist" style={{ marginBottom: 16 }}>
-        {tabs.map((x) => (
-          <button key={x.id} role="tab" aria-selected={tab === x.id} className={tab === x.id ? 'on' : ''} onClick={() => selectTab(x.id)}>{x.label}</button>
+        {tabs.map((item) => (
+          <button key={item.id} role="tab" aria-selected={activeTab === item.id} className={activeTab === item.id ? 'on' : ''} onClick={() => selectTab(item.id)}>{item.label}</button>
         ))}
       </div>
-      {tab === 'admins' && canManageMembership && <AdminMembership governance={admin} />}
-      {tab === 'quals' && <QualQueue />}
-      {tab === 'policies' && <PolicyEditor />}
-      {tab === 'election' && (currentRuntimeMode() === 'aptos-testnet' ? <DocumentElectionManager /> : <NewElection />)}
-      {tab === 'content' && <ContentManager />}
-      {tab === 'log' && <AdminLog />}
+      {activeTab === 'admins' && canManageMembership && <AdminMembership governance={admin} />}
+      {activeTab === 'admission' && <VoterAdmissionPolicy />}
+      {activeTab === 'quals' && legacyToolsAvailable && <QualQueue />}
+      {activeTab === 'policies' && legacyToolsAvailable && <PolicyEditor />}
+      {activeTab === 'election' && legacyToolsAvailable && (currentRuntimeMode() === 'aptos-testnet' ? <DocumentElectionManager /> : <NewElection />)}
+      {activeTab === 'content' && legacyToolsAvailable && <ContentManager />}
+      {activeTab === 'log' && legacyToolsAvailable && <AdminLog />}
     </>
   )
 }

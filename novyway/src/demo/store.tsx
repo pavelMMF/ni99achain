@@ -54,6 +54,7 @@ export interface Settings {
   musicOn: boolean
   musicVolume: number
   musicInBackground: boolean
+  musicPreferenceVersion: number
   reducedMotion: boolean
   identityMode: boolean // показывать личности вместо адресов
   lang: Lang
@@ -68,18 +69,29 @@ export interface Settings {
 }
 
 const defaultSettings: Settings = {
-  soundOn: true, volume: 0.5, musicOn: false, musicVolume: 0.59, musicInBackground: false, reducedMotion: false, identityMode: true, lang: 'ru',
+  soundOn: true, volume: 0.5, musicOn: true, musicVolume: 0.59, musicInBackground: false, musicPreferenceVersion: 2, reducedMotion: false, identityMode: true, lang: 'ru',
   theme: 'system', dataLanguage: 'auto', documentsView: 'combined',
   profile: { name: '', email: '', telegram: '' },
   readDocs: [],
   auth: null,
 }
 
-function loadLS<T>(key: string, fallback: T): T {
+const MUSIC_PREFERENCE_VERSION = 3
+
+function loadSettings(): Settings {
   try {
-    const raw = localStorage.getItem(key)
-    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback
-  } catch { return fallback }
+    const raw = localStorage.getItem('novyi-put-settings')
+    if (!raw) return defaultSettings
+    const parsed = JSON.parse(raw) as Partial<Settings>
+    return {
+      ...defaultSettings,
+      ...parsed,
+      musicOn: parsed.musicPreferenceVersion === MUSIC_PREFERENCE_VERSION ? Boolean(parsed.musicOn) : true,
+      musicPreferenceVersion: MUSIC_PREFERENCE_VERSION,
+    }
+  } catch {
+    return defaultSettings
+  }
 }
 function saveLS(key: string, v: unknown) {
   try { localStorage.setItem(key, JSON.stringify(v)) } catch { /* приватный режим */ }
@@ -336,7 +348,7 @@ export { ME, persons, exams, groupNames, groupColors }
 // ---------- провайдер ----------
 
 export function AppProviders({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<Settings>(() => loadLS('novyi-put-settings', defaultSettings))
+  const [settings, setSettings] = useState<Settings>(loadSettings)
   const [state, dispatch] = useReducer(reducer, initialState)
 
   useEffect(() => {
@@ -354,12 +366,30 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   useEffect(() => { void music.prepare() }, [])
 
-
   useEffect(() => {
     music.setBackgroundPlayback(settings.musicInBackground)
-    if (settings.musicOn) void music.play()
-    else if (music.enabledIntent) music.pause()
-  }, [settings.musicInBackground, settings.musicOn])
+  }, [settings.musicInBackground])
+
+  useEffect(() => {
+    if (settings.musicOn) {
+      if (!music.enabledIntent) void music.play()
+    } else if (music.enabledIntent) {
+      music.pause()
+    }
+  }, [settings.musicOn])
+
+  useEffect(() => {
+    if (!settings.musicOn) return
+    const resumeAfterBrowserGesture = () => {
+      if (['blocked', 'paused', 'ready', 'error'].includes(music.status)) void music.play()
+    }
+    window.addEventListener('pointerdown', resumeAfterBrowserGesture, { capture: true })
+    window.addEventListener('keydown', resumeAfterBrowserGesture, { capture: true })
+    return () => {
+      window.removeEventListener('pointerdown', resumeAfterBrowserGesture, { capture: true })
+      window.removeEventListener('keydown', resumeAfterBrowserGesture, { capture: true })
+    }
+  }, [settings.musicOn])
   const settingsValue = useMemo(() => ({
     s: settings,
     update: (p: Partial<Settings>) => setSettings((s) => ({ ...s, ...p })),

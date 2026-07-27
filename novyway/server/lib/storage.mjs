@@ -3,7 +3,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import pg from 'pg'
-import { backupRoot, databaseConfigPath, postgresBin, secretsRoot } from './runtime-paths.mjs'
+import { backupRoot, databaseAdminConfigPath, databaseConfigPath, postgresBin, secretsRoot } from './runtime-paths.mjs'
 import {
   canonicalJson,
   canonicalSha256,
@@ -16,14 +16,15 @@ import {
 
 export { backupRoot, secretsRoot }
 
-function loadDatabaseConfig() {
-  if (!existsSync(databaseConfigPath)) {
-    throw new Error(`PostgreSQL is not configured. Run server\\Setup-PostgreSQL.ps1 first: ${databaseConfigPath}`)
+function loadDatabaseConfig(path = databaseConfigPath) {
+  if (!existsSync(path)) {
+    throw new Error(`PostgreSQL is not configured. Run server\\Setup-PostgreSQL.ps1 first: ${path}`)
   }
-  return JSON.parse(readFileSync(databaseConfigPath, 'utf8').replace(/^\uFEFF/, ''))
+  return JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''))
 }
 
 const config = loadDatabaseConfig()
+const backupConfig = loadDatabaseConfig(databaseAdminConfigPath)
 export const databasePath = `postgresql://${config.user}@${config.host}:${config.port}/${config.database}`
 export const pool = new pg.Pool({
   host: config.host,
@@ -164,6 +165,7 @@ export async function initializeStorage() {
 
     CREATE TABLE IF NOT EXISTS vote_intents (
       id uuid PRIMARY KEY,
+      organization_id text NOT NULL DEFAULT 'org_novyway',
       user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       idempotency_key uuid NOT NULL,
       sender_address text NOT NULL,
@@ -182,6 +184,11 @@ export async function initializeStorage() {
       UNIQUE(user_id, idempotency_key),
       CHECK (yes_bps + no_bps + abstain_bps = 10000)
     );
+    ALTER TABLE vote_intents ADD COLUMN IF NOT EXISTS organization_id text NOT NULL DEFAULT 'org_novyway';
+    ALTER TABLE vote_intents DROP CONSTRAINT IF EXISTS vote_intents_user_id_idempotency_key_key;
+    ALTER TABLE vote_intents DROP CONSTRAINT IF EXISTS vote_intents_organization_user_idempotency_key;
+    ALTER TABLE vote_intents ADD CONSTRAINT vote_intents_organization_user_idempotency_key
+      UNIQUE (organization_id, user_id, idempotency_key);
     ALTER TABLE vote_intents ADD COLUMN IF NOT EXISTS intent_kind text NOT NULL DEFAULT 'weighted_vote';
     ALTER TABLE vote_intents DROP CONSTRAINT IF EXISTS vote_intents_intent_kind_check;
     ALTER TABLE vote_intents ADD CONSTRAINT vote_intents_intent_kind_check
@@ -1646,9 +1653,9 @@ export async function createDatabaseBackup() {
   const stamp = new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-')
   const destination = join(backupRoot, `sovet-online-postgresql-${stamp}.dump`)
   await runProcess(join(postgresBin, 'pg_dump.exe'), [
-    '--host', config.host, '--port', String(config.port), '--username', config.user,
+    '--host', backupConfig.host, '--port', String(backupConfig.port), '--username', backupConfig.user,
     '--dbname', config.database, '--format=custom', '--no-password', '--file', destination,
-  ], { PGPASSWORD: config.password })
+  ], { PGPASSWORD: backupConfig.password })
   const bytes = statSync(destination).size
   const sha256 = await hashFile(destination)
   const id = randomUUID()
@@ -1664,20 +1671,22 @@ export async function latestBackup() {
 }
 
 export async function createOrGetVoteIntent(input) {
+  const organizationId = input.organizationId ?? 'org_novyway'
   const id = randomUUID()
   const inserted = await pool.query(`INSERT INTO vote_intents
-    (id, user_id, idempotency_key, sender_address, election_id, yes_bps, no_bps, abstain_bps,
+    (id, organization_id, user_id, idempotency_key, sender_address, election_id, yes_bps, no_bps, abstain_bps,
      raw_transaction_b64, intent_kind, status, created_at, expires_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'prepared', NOW(), $11)
-    ON CONFLICT (user_id, idempotency_key) DO NOTHING
-    RETURNING *`, [id, input.userId, input.idempotencyKey, input.senderAddress, input.electionId,
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'prepared', NOW(), $12)
+    ON CONFLICT (organization_id, user_id, idempotency_key) DO NOTHING
+    RETURNING *`, [id, organizationId, input.userId, input.idempotencyKey, input.senderAddress, input.electionId,
       input.yesBps, input.noBps, input.abstainBps, input.rawTransactionB64, input.intentKind, input.expiresAt])
   if (inserted.rows[0]) return inserted.rows[0]
 
   const existing = await pool.query(`SELECT * FROM vote_intents
-    WHERE user_id = $1 AND idempotency_key = $2`, [input.userId, input.idempotencyKey])
+    WHERE organization_id = $1 AND user_id = $2 AND idempotency_key = $3`, [organizationId, input.userId, input.idempotencyKey])
   const row = existing.rows[0]
   const payloadMatches = row
+    && row.organization_id === organizationId
     && row.sender_address.toLowerCase() === input.senderAddress.toLowerCase()
     && String(row.election_id) === String(input.electionId)
     && row.yes_bps === input.yesBps
@@ -1690,34 +1699,34 @@ export async function createOrGetVoteIntent(input) {
   return row
 }
 
-export async function getVoteIntent(id) {
-  const { rows } = await pool.query('SELECT * FROM vote_intents WHERE id = $1', [id])
+export async function getVoteIntent(id, organizationId = 'org_novyway') {
+  const { rows } = await pool.query('SELECT * FROM vote_intents WHERE id = $1 AND organization_id = $2', [id, organizationId])
   return rows[0] ?? null
 }
 
-export async function countRecentSponsoredVotes(userId = null) {
+export async function countRecentSponsoredVotes(userId = null, organizationId = 'org_novyway') {
   const { rows } = userId
     ? await pool.query(`SELECT COUNT(*)::int AS count FROM vote_intents
-        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`, [userId])
+        WHERE organization_id = $1 AND user_id = $2 AND created_at > NOW() - INTERVAL '1 hour'`, [organizationId, userId])
     : await pool.query(`SELECT COUNT(*)::int AS count FROM vote_intents
-        WHERE created_at > NOW() - INTERVAL '1 hour'`)
+        WHERE organization_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`, [organizationId])
   return rows[0].count
 }
 
-export async function claimVoteIntent({ id, userId, globalHourlyLimit = 250 }) {
+export async function claimVoteIntent({ id, userId, organizationId = 'org_novyway', globalHourlyLimit = 250 }) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     await client.query('SELECT pg_advisory_xact_lock($1)', [86420071])
     const { rows: usage } = await client.query(`SELECT COUNT(*)::int AS count FROM vote_intents
-      WHERE status <> 'prepared' AND created_at > NOW() - INTERVAL '1 hour'`)
+      WHERE organization_id = $1 AND status <> 'prepared' AND created_at > NOW() - INTERVAL '1 hour'`, [organizationId])
     if (usage[0].count >= globalHourlyLimit) {
       throw Object.assign(new Error('sponsorship_global_rate_limited'), { status: 429 })
     }
     const { rows } = await client.query(`UPDATE vote_intents
       SET status = 'submitting'
-      WHERE id = $1 AND user_id = $2 AND status = 'prepared' AND expires_at > NOW()
-      RETURNING *`, [id, userId])
+      WHERE id = $1 AND user_id = $2 AND organization_id = $3 AND status = 'prepared' AND expires_at > NOW()
+      RETURNING *`, [id, userId, organizationId])
     await client.query('COMMIT')
     return rows[0] ?? null
   } catch (error) {

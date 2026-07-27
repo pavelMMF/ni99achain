@@ -6,6 +6,7 @@ import { AccountRef, PageHead, Panel, Switch } from '../ui/components'
 import type { AuditEventType } from '../domain/types'
 import { currentRuntimeMode } from '../adapters/types'
 import { LiveAudit } from './LiveAudit'
+import { AuditExplainer } from './AuditExplainer'
 
 const typeFilters: (AuditEventType | 'all')[] = ['all', 'vote', 'revote', 'receipt', 'qualification', 'policy', 'snapshot', 'election_created', 'finalized', 'admin']
 
@@ -45,7 +46,7 @@ function DemoAudit() {
     <>
       <PageHead
         title={t('au.title')}
-        sub={t('au.sub')}
+
         right={
           <div title={t('au.identityHint')}>
             <Switch checked={s.identityMode} onChange={(v) => update({ identityMode: v })} label={t('au.identityMode')} />
@@ -68,6 +69,8 @@ function DemoAudit() {
           ))}
         </select>
       </div>
+
+      <AuditExplainer />
 
       <Panel>
         <table className="tbl responsive">

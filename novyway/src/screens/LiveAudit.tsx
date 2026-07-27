@@ -6,6 +6,7 @@ import { useLiveAudit } from '../adapters/aptos/useLiveAptos'
 import type { AuditEventType } from '../domain/types'
 import { fmtDate, shortAddr, useT } from '../i18n'
 import { PageHead, Panel } from '../ui/components'
+import { AuditExplainer } from './AuditExplainer'
 
 const filters: (AuditEventType | 'all')[] = ['all', 'vote', 'revote', 'qualification', 'policy', 'election_created', 'finalized', 'admin', 'category', 'document']
 const colors: Record<AuditEventType, string> = {
@@ -33,7 +34,7 @@ export function LiveAudit() {
   return <>
     <PageHead
       title={t('au.title')}
-      sub={ru ? 'Публичный журнал: данные каждой строки получены по хэшу транзакции из Aptos Testnet' : 'Public log: every row is loaded by transaction hash from Aptos Testnet'}
+
       right={<a className="btn small" href={aptosTestnetExplorer(`account/${configuredVotingModule()}/modules`)} target="_blank" rel="noreferrer">{ru ? 'Сверить модуль' : 'Verify module'} ↗</a>}
     />
     <div className="row" style={{ marginBottom: 14 }}>
@@ -45,6 +46,7 @@ export function LiveAudit() {
     </div>
     {error && <div className="callout red" style={{ marginBottom: 14 }}>{ru ? 'Не удалось прочитать журнал: ' : 'Could not read the log: '}{error}</div>}
     <div className="callout" style={{ marginBottom: 14 }}>{ru ? 'Здесь показан проверяемый набор известных транзакций развёртывания и испытаний. Это не полный индекс всех действий сети.' : 'This is a verifiable set of known deployment and test transactions, not a complete index of every network action.'}</div>
+    <AuditExplainer />
     <Panel>
       <table className="tbl responsive">
         <thead><tr><th>{t('common.date')}</th><th>{t('au.type')}</th><th>{t('common.actor')}</th><th>{t('common.event')}</th><th>{t('au.proof')}</th></tr></thead>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useWallet } from '@aptos-labs/wallet-adapter-react'
 import { aptosView, configuredAptosRpc, configuredVotingModule } from '../../adapters/aptos/aptosReadGateway'
-import type { GovernanceAdminState } from '../../adapters/aptos/adminAccess'
+import type { GovernanceAdminContextState } from './GovernanceAdminGate'
 import { AptosWalletBoundary } from '../../auth/AptosWalletBoundary'
 import { useT } from '../../i18n'
 import { sound } from '../../sound/engine'
@@ -56,7 +56,7 @@ async function waitForTransaction(hash: string) {
   throw new Error('transaction_confirmation_timeout')
 }
 
-function AdminMembershipContent({ governance }: { governance: GovernanceAdminState }) {
+function AdminMembershipContent({ governance }: { governance: GovernanceAdminContextState }) {
   const { lang } = useT()
   const ru = lang === 'ru'
   const { connected, account, signAndSubmitTransaction } = useWallet()
@@ -186,7 +186,7 @@ function AdminMembershipContent({ governance }: { governance: GovernanceAdminSta
     ], 'create-election')
   }
 
-  if (!governance.isCreator) return <Panel title={ru ? 'Состав Совета' : 'Council membership'}>
+  if (!governance.siteSuperAdmin) return <Panel title={ru ? 'Состав Совета' : 'Council membership'}>
     <p className="muted">{ru ? 'Назначать администраторов и создавать выборы состава может только неизменяемый creator.' : 'Only the immutable creator can appoint administrators or create membership elections.'}</p>
     <code className="mono governance-address">{governance.creator}</code>
   </Panel>
@@ -273,6 +273,6 @@ function AdminMembershipContent({ governance }: { governance: GovernanceAdminSta
   </div>
 }
 
-export function AdminMembership({ governance }: { governance: GovernanceAdminState }) {
+export function AdminMembership({ governance }: { governance: GovernanceAdminContextState }) {
   return <AptosWalletBoundary><AdminMembershipContent governance={governance} /></AptosWalletBoundary>
 }

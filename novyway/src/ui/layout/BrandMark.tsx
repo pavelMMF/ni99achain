@@ -1,8 +1,8 @@
 // Знак бренда «Новый Путь» — восходящий путь из подтверждённых узлов-ступеней
 // к красной стреле вперёд. Тот же знак используется в favicon и PWA-иконках.
-export function BrandMark({ className }: { className?: string }) {
+export function BrandMark({ className, ariaLabel = 'Новый Путь' }: { className?: string; ariaLabel?: string }) {
   return (
-    <svg className={className} width="100%" height="100%" viewBox="0 0 64 64" role="img" aria-label="Новый Путь">
+    <svg className={className} width="100%" height="100%" viewBox="0 0 64 64" role="img" aria-label={ariaLabel}>
       <defs><clipPath id="brand-np-mark"><path d="M0 0H64V50L50 64H0Z" /></clipPath></defs>
       <g clipPath="url(#brand-np-mark)">
         <rect width="64" height="64" fill="#111816" />

@@ -74,7 +74,7 @@ export default function Participants() {
   return <>
     <PageHead
       title={ru ? 'Участники' : 'Participants'}
-      sub={ru ? 'Публичная активность аккаунтов без раскрытия почты, способов входа и закрытых данных.' : 'Public account activity without exposing email, sign-in methods, or private data.'}
+
       right={<span className="participant-total"><strong>{total}</strong><small>{ru ? 'активных аккаунтов' : 'active accounts'}</small></span>}
     />
 

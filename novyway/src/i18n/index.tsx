@@ -17,6 +17,8 @@ const dict = {
   'nav.exams': { ru: 'Экзамены', en: 'Exams' },
   'nav.audit': { ru: 'Аудит', en: 'Audit' },
   'nav.admin': { ru: 'Управление', en: 'Admin' },
+  'nav.access': { ru: 'Уровни доступа', en: 'Access roles' },
+  'nav.applications': { ru: 'Заявки организаций', en: 'Organization review' },
   'nav.settings': { ru: 'Настройки', en: 'Settings' },
   'nav.categories': { ru: 'Категории', en: 'Categories' },
   'nav.main': { ru: 'Рабочие разделы', en: 'Workspaces' },

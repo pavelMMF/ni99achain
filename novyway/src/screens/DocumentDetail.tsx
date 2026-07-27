@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { recordDocumentOpened } from '../adapters/participants'
 import {
@@ -19,6 +19,7 @@ import { sound } from '../sound/engine'
 import { currentRuntimeMode } from '../adapters/types'
 import { CatChip, PageHead, Panel, StatusChip, Switch } from '../ui/components'
 import { DocumentProposalComposer } from '../ui/components/DocumentProposalComposer'
+import { useAccessibleIds, useResourcePermissions } from '../tenancy/access'
 
 export default function DocumentDetail() {
   const { id } = useParams()
@@ -33,13 +34,19 @@ export default function DocumentDetail() {
   const docId = d?.id
   const testnet = currentRuntimeMode() === 'aptos-testnet'
   const { user } = useAccountSession()
+  const documentAccess = useResourcePermissions('document', id ?? '')
+  const canReadDocument = documentAccess.permissions?.content === true
   const live = useLiveVoting()
-  const registry = useDocumentProposals({ documentId: docId, enabled: testnet && Boolean(docId) })
+  const registry = useDocumentProposals({ documentId: docId, enabled: testnet && Boolean(docId) && canReadDocument })
+  const electionIds = useMemo(() => (live.data?.elections ?? []).map((election) => election.id), [live.data?.elections])
+  const electionAccess = useAccessibleIds('election', electionIds, 'subject')
+  const accessibleElections = useMemo(() => (live.data?.elections ?? []).filter((election) => electionAccess.allowed?.has(election.id)), [electionAccess.allowed, live.data?.elections])
+  const visibleProposals = useMemo(() => registry.proposals.filter((proposal) => !proposal.electionId || electionAccess.allowed?.has(proposal.electionId)), [electionAccess.allowed, registry.proposals])
   const [verification, setVerification] = useState<Record<string, ProposalVerification>>({})
   const alreadyRead = docId ? s.readDocs.includes(docId) : false
 
   useEffect(() => {
-    if (!docId || !user?.csrfToken) return
+    if (!docId || !user?.csrfToken || !canReadDocument) return
     const timer = window.setTimeout(() => {
       recordDocumentOpened(docId, user.csrfToken!)
         .then(() => {
@@ -48,10 +55,10 @@ export default function DocumentDetail() {
         .catch(() => null)
     }, 8_000)
     return () => window.clearTimeout(timer)
-  }, [docId, user?.csrfToken, s.readDocs, update])
+  }, [canReadDocument, docId, user?.csrfToken, s.readDocs, update])
 
   useEffect(() => {
-    if (!testnet) return
+    if (!testnet || !canReadDocument) return
     let active = true
     Promise.all(registry.proposals.map(async (proposal) => {
       if (!d || !proposalMatchesDocumentBase(proposal, d)) return [proposal.id, 'mismatch'] as const
@@ -59,7 +66,7 @@ export default function DocumentDetail() {
       return [proposal.id, await verifyDocumentProposal(proposal, election)] as const
     })).then((entries) => { if (active) setVerification(Object.fromEntries(entries)) })
     return () => { active = false }
-  }, [d, testnet, registry.proposals, live.data])
+  }, [canReadDocument, d, testnet, registry.proposals, live.data])
 
   const hasPassedVerifiedProposal = registry.proposals.some((proposal) => verification[proposal.id] === 'verified'
     && live.data?.elections.some((election) => election.id === proposal.electionId && election.status === 'passed'))
@@ -68,6 +75,8 @@ export default function DocumentDetail() {
   }, [hasPassedVerifiedProposal, showNew, testnet])
 
   if (!d) return <div className="empty">{t('au.empty')}</div>
+  if (documentAccess.loading) return <div className="empty">{lang === 'ru' ? 'Проверяем доступ к документу…' : 'Checking document access…'}</div>
+  if (!documentAccess.permissions?.discover || !canReadDocument) return <div className="callout red">{lang === 'ru' ? 'У вас нет доступа к этому документу.' : 'You do not have access to this document.'}</div>
   const cat = state.categories.find((category) => category.id === d.categoryId)!
 
   return <>
@@ -93,10 +102,10 @@ export default function DocumentDetail() {
           <h2>{l(d.title)}</h2>
           <div className="doc-meta"><span>{t('doc.version')} {d.version}</span><span>{t('doc.hash')} {d.documentHash}</span><span>{showNew ? t('el.proposedText') : t('el.currentText')}</span></div>
           {d.clauses.map((clause) => {
-            const clauseProposals = registry.proposals.filter((item) => item.clauseId === clause.id)
+            const clauseProposals = visibleProposals.filter((item) => item.clauseId === clause.id)
             const verifiedPairs = clauseProposals
               .filter((item) => verification[item.id] === 'verified')
-              .map((proposal) => ({ proposal, election: live.data?.elections.find((item) => item.id === proposal.electionId) }))
+              .map((proposal) => ({ proposal, election: accessibleElections.find((item) => item.id === proposal.electionId) }))
             const preferred = showNew
               ? verifiedPairs.find((pair) => pair.election?.status === 'passed')
               : verifiedPairs.find((pair) => ['active', 'upcoming', 'awaiting_finalization'].includes(pair.election?.status ?? '')) ?? verifiedPairs[0]
@@ -109,9 +118,9 @@ export default function DocumentDetail() {
       {testnet && <aside className="document-detail-side">
         <DocumentProposalQueue
           document={d}
-          proposals={registry.proposals}
+          proposals={visibleProposals}
           verification={verification}
-          elections={live.data?.elections ?? []}
+          elections={accessibleElections}
           categories={live.data?.categories ?? []}
           loading={registry.loading}
           error={registry.error ?? null}

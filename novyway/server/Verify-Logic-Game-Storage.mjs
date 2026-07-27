@@ -19,8 +19,8 @@ try {
     VALUES ($1, $2, 'wallet', 'voter', 'active', 'external', NOW(), NOW())`, [userId, address])
 
   const duplicate = await Promise.all([
-    recordLogicGameAnswer({ userId, challengeId: 'logic-001-v1', selectedIndex: 1, correct: true, points: 20 }),
-    recordLogicGameAnswer({ userId, challengeId: 'logic-001-v1', selectedIndex: 0, correct: false, points: 0 }),
+    recordLogicGameAnswer({ userId, challengeId: 'logic-real-001-v1', selectedIndex: 0, correct: true, points: 20 }),
+    recordLogicGameAnswer({ userId, challengeId: 'logic-real-001-v1', selectedIndex: 1, correct: false, points: 0 }),
   ])
   assert.equal(duplicate.filter((result) => result.recorded).length, 1, 'Concurrent duplicate must score once')
 
@@ -35,7 +35,7 @@ try {
 
   const second = await recordLogicGameAnswer({
     userId,
-    challengeId: 'logic-002-v1',
+    challengeId: 'logic-culture-001-v1',
     selectedIndex: 0,
     correct: false,
     points: 0,
@@ -49,7 +49,7 @@ try {
     bestStreak: 1,
   })
 
-  assert.deepEqual(new Set(await listLogicGameAnsweredIds(userId)), new Set(['logic-001-v1', 'logic-002-v1']))
+  assert.deepEqual(new Set(await listLogicGameAnsweredIds(userId)), new Set(['logic-real-001-v1', 'logic-culture-001-v1']))
   console.log(JSON.stringify({
     persistedPerUserScore: true,
     concurrentDuplicateScoredOnce: true,

@@ -13,9 +13,21 @@ export type AccountUser = {
   role: string
   isAdmin: boolean
   isSuperAdmin: boolean
+  governanceSignerActive: boolean
+  creatorSignerActive: boolean
+  organizationRole: string | null
   createdAt: string
   lastLoginAt: string
   csrfToken: string | null
+}
+
+export function hasWebsiteGovernanceAccess(user: AccountUser | null | undefined) {
+  return Boolean(
+    user?.isAdmin
+    || user?.isSuperAdmin
+    || user?.organizationRole === 'owner'
+    || user?.organizationRole === 'governance_admin',
+  )
 }
 
 type SessionContextValue = {

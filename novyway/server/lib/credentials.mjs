@@ -39,6 +39,8 @@ function secretBytes(name, length = 32) {
 }
 
 const walletKey = secretBytes('managed-wallets.key')
+const organizationRelayerKey = secretBytes('organization-relayers.key')
+const organizationNotificationKey = secretBytes('organization-notifications.key')
 const verificationPepper = secretBytes('email-verification.key')
 const operatorKey = secretBytes('operator-console.key')
 
@@ -59,20 +61,46 @@ export async function verifyPassword(password, encoded) {
   return expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 
-export function encryptManagedPrivateKey(privateKey) {
+function encryptPrivateKey(privateKey, key) {
   const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', walletKey, iv)
+  const cipher = createCipheriv('aes-256-gcm', key, iv)
   const ciphertext = Buffer.concat([cipher.update(privateKey, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
-  return [iv, tag, ciphertext].map((value) => value.toString('base64url')).join('.')
+  return `v1.${[iv, tag, ciphertext].map((value) => value.toString('base64url')).join('.')}`
+}
+
+function decryptPrivateKey(envelope, key, errorCode) {
+  const parts = String(envelope ?? '').split('.')
+  const versioned = parts.length === 4 && parts[0] === 'v1'
+  const [ivText, tagText, ciphertextText] = versioned ? parts.slice(1) : parts
+  if (!ivText || !tagText || !ciphertextText) throw new Error(errorCode)
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivText, 'base64url'))
+  decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
+  return Buffer.concat([decipher.update(Buffer.from(ciphertextText, 'base64url')), decipher.final()]).toString('utf8')
+}
+
+export function encryptManagedPrivateKey(privateKey) {
+  return encryptPrivateKey(privateKey, walletKey)
 }
 
 export function decryptManagedPrivateKey(envelope) {
-  const [ivText, tagText, ciphertextText] = String(envelope ?? '').split('.')
-  if (!ivText || !tagText || !ciphertextText) throw new Error('managed_wallet_key_invalid')
-  const decipher = createDecipheriv('aes-256-gcm', walletKey, Buffer.from(ivText, 'base64url'))
-  decipher.setAuthTag(Buffer.from(tagText, 'base64url'))
-  return Buffer.concat([decipher.update(Buffer.from(ciphertextText, 'base64url')), decipher.final()]).toString('utf8')
+  return decryptPrivateKey(envelope, walletKey, 'managed_wallet_key_invalid')
+}
+
+export function encryptOrganizationRelayerPrivateKey(privateKey) {
+  return encryptPrivateKey(privateKey, organizationRelayerKey)
+}
+
+export function decryptOrganizationRelayerPrivateKey(envelope) {
+  return decryptPrivateKey(envelope, organizationRelayerKey, 'organization_relayer_key_invalid')
+}
+
+export function encryptOrganizationNotificationToken(token) {
+  return encryptPrivateKey(token, organizationNotificationKey)
+}
+
+export function decryptOrganizationNotificationToken(envelope) {
+  return decryptPrivateKey(envelope, organizationNotificationKey, 'organization_notification_token_invalid')
 }
 
 export function hashEmailCode({ userId, purpose, email, code }) {

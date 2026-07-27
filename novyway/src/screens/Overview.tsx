@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate } from 'react-router-dom'
 import { daysLeft, fmtDate, shortAddr, useT } from '../i18n'
 import { ME, exams, useStore } from '../demo/store'
@@ -11,6 +12,20 @@ import { configuredVotingModule } from '../adapters/aptos/aptosReadGateway'
 import { aptosTestnetExplorer } from '../adapters/aptos/documentAnchorGateway'
 import { fetchParticipant } from '../adapters/participants'
 import { useAccountSession } from '../auth/session'
+import { useOrganization } from '../tenancy/OrganizationContext'
+import { DEFAULT_ORGANIZATION_SLUG } from '../tenancy/organization'
+
+const INTRO_COOKIE = 'novyway_intro_seen'
+
+function hasSeenIntroduction() {
+  return document.cookie
+    .split(';')
+    .some((part) => part.trim().startsWith(INTRO_COOKIE + '='))
+}
+
+function rememberIntroduction() {
+  document.cookie = INTRO_COOKIE + '=1; Max-Age=31536000; Path=/; SameSite=Lax'
+}
 
 export default function Overview() {
   const { t, l, lang } = useT()
@@ -18,7 +33,10 @@ export default function Overview() {
   const nav = useNavigate()
   const runtimeMode = currentRuntimeMode()
   const { user } = useAccountSession()
+  const { orgSlug } = useOrganization()
   const [participationScore, setParticipationScore] = useState(0)
+  const [showIntroInvite, setShowIntroInvite] = useState(false)
+  const introDialogRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     setParticipationScore(0)
@@ -29,6 +47,77 @@ export default function Overview() {
       .catch(() => { if (!controller.signal.aborted) setParticipationScore(0) })
     return () => controller.abort()
   }, [user?.id])
+
+  useEffect(() => {
+    if (orgSlug === DEFAULT_ORGANIZATION_SLUG && !hasSeenIntroduction()) {
+      setShowIntroInvite(true)
+    }
+  }, [orgSlug])
+
+  useEffect(() => {
+    if (!showIntroInvite) return
+
+    const dialog = introDialogRef.current
+    const root = document.getElementById('root')
+    const rootWasInert = root?.hasAttribute('inert') ?? false
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousOverflow = document.body.style.overflow
+    const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+    root?.setAttribute('inert', '')
+    document.body.style.overflow = 'hidden'
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      dialog?.querySelector<HTMLElement>(focusableSelector)?.focus()
+    })
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setShowIntroInvite(false)
+        return
+      }
+      if (event.key !== 'Tab' || !dialog) return
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter((element) => !element.hasAttribute('disabled'))
+      if (focusable.length === 0) {
+        event.preventDefault()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      document.removeEventListener('keydown', handleKeyDown)
+      if (!rootWasInert) root?.removeAttribute('inert')
+      document.body.style.overflow = previousOverflow
+      previousFocus?.focus()
+    }
+  }, [showIntroInvite])
+
+  function closeIntroduction() {
+    rememberIntroduction()
+    setShowIntroInvite(false)
+  }
+
+  function openIntroduction() {
+    rememberIntroduction()
+    setShowIntroInvite(false)
+    nav('/about')
+  }
 
   const active = state.elections.filter((e) => e.status === 'active')
   const needVote = active.filter((e) =>
@@ -42,7 +131,6 @@ export default function Overview() {
     <>
       <PageHead
         title={t('ov.title')}
-        sub={t('ov.sub')}
         right={
           <Link to="/profile" className="row" style={{ gap: 10, alignItems: 'center', textDecoration: 'none' }} title={t('sc.title')}>
             <ScoreRing score={participationScore} size={52} />
@@ -50,14 +138,35 @@ export default function Overview() {
         }
       />
 
-      {runtimeMode === 'aptos-testnet' && (
-        <div className="callout" style={{ marginBottom: 14 }}>
-          {lang === 'ru'
-            ? 'Сеть, голосования и журнал читаются из Aptos Testnet. Личный профиль, экзамены и редактор документов пока работают как демонстрация.'
-            : 'Network, elections, and audit data come from Aptos Testnet. The personal profile, exams, and document editor are still demonstrations.'}
-        </div>
+      {showIntroInvite && createPortal(
+        <div className="intro-invite-backdrop" role="presentation">
+          <section
+            ref={introDialogRef}
+            className="intro-invite"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="intro-invite-title"
+            aria-describedby="intro-invite-copy"
+          >
+            <span className="intro-invite-index" aria-hidden>01</span>
+            <h2 id="intro-invite-title">{lang === 'ru' ? 'Вы здесь впервые?' : 'First time here?'}</h2>
+            <p id="intro-invite-copy">
+              {lang === 'ru'
+                ? 'За три минуты можно разобраться, зачем проекту веса голосов, документы и проверяемая история решений.'
+                : 'A three-minute introduction explains weighted votes, documents, and the verifiable history of decisions.'}
+            </p>
+            <div className="intro-invite-actions">
+              <button className="btn primary" autoFocus onClick={openIntroduction}>
+                {lang === 'ru' ? 'Прочитать о проекте' : 'Read the introduction'}
+              </button>
+              <button className="btn" onClick={closeIntroduction}>
+                {lang === 'ru' ? 'Сразу к обзору' : 'Go straight to overview'}
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body,
       )}
-
       {runtimeMode === 'demo' && needVote.length > 0 && (
         <div className="callout red" style={{ marginBottom: 14 }}>
           <strong>{t('ov.yourAction')}:</strong>{' '}

@@ -135,7 +135,7 @@ function verificationLabel(state: VerificationState, ru: boolean) {
   return labels[state][ru ? 0 : 1]
 }
 
-export function OnChainDocumentRegistry() {
+export function OnChainDocumentRegistry({ visibleDocumentIds }: { visibleDocumentIds?: string[] } = {}) {
   const { lang } = useT()
   const ru = lang === 'ru'
   const [documents, setDocuments] = useState<RegistryDocument[]>([])
@@ -153,7 +153,9 @@ export function OnChainDocumentRegistry() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  const verifiedCount = documents.filter((document) => document.state === 'verified').length
+  const visibleIdSet = visibleDocumentIds ? new Set(visibleDocumentIds) : null
+  const visibleDocuments = visibleIdSet ? documents.filter((document) => document.metadata && visibleIdSet.has(document.metadata.documentId)) : documents
+  const verifiedCount = visibleDocuments.filter((document) => document.state === 'verified').length
   return (
     <Panel
       className="chain-registry"
@@ -174,7 +176,7 @@ export function OnChainDocumentRegistry() {
       {error && <div className="callout red chain-registry-error">{ru ? 'Узел Aptos недоступен: ' : 'Aptos node unavailable: '}{error}</div>}
       {!error && !loading && (
         <div className="chain-registry-summary mono">
-          {verifiedCount}/{documents.length} {ru ? 'файлов совпадают с записями в сети' : 'files match their on-chain records'}
+          {verifiedCount}/{visibleDocuments.length} {ru ? 'файлов совпадают с записями в сети' : 'files match their on-chain records'}
           <a href={aptosTestnetExplorer(`account/${packageAddress}/modules`)} target="_blank" rel="noreferrer">
             {ru ? ' Открыть модуль в обозревателе' : ' Open module in Explorer'}
           </a>
@@ -182,7 +184,7 @@ export function OnChainDocumentRegistry() {
       )}
 
       <div className="chain-registry-list" aria-live="polite">
-        {documents.map((document) => {
+        {visibleDocuments.map((document) => {
           const date = new Date(Number(document.anchor.anchoredAtSecs) * 1000).toLocaleString(ru ? 'ru-RU' : 'en-GB')
           const title = document.metadata
             ? documentTitles[document.metadata.documentId]?.[lang] ?? (ru ? document.metadata.title : document.metadata.documentId.replaceAll('-', ' '))

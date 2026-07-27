@@ -28,7 +28,7 @@ function DemoElections() {
 
   return (
     <>
-      <PageHead title={t('el.title')} sub={t('el.sub')} />
+      <PageHead title={t('el.title')} />
 
       <div className="row" style={{ marginBottom: 14 }}>
         <div className="seg" role="tablist">
